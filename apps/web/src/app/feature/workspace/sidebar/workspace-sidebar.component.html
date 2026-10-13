@@ -1,0 +1,32 @@
+<aside class="sidebar">
+  <div class="sidebar-actions">
+    <a class="sidebar-action" routerLink="/tables/customers/data" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: false }">
+      <span class="nav-icon">▦</span><span>Workspace</span>
+    </a>
+    <a class="sidebar-action" routerLink="/runbook" routerLinkActive="active">
+      <span class="nav-icon">▤</span><span>Runbooks</span>
+      @if (drafts.pendingCellEdits().length) { <span class="nav-count">{{ drafts.pendingCellEdits().length }}</span> }
+    </a>
+  </div>
+  <div class="sidebar-section-heading">
+    <span>CONNECTIONS</span>
+    <button class="tiny-icon-button" type="button" aria-label="Add connection" title="Connection setup comes next">+</button>
+  </div>
+  <div class="connection-item selected">
+    <span class="database-icon">◉</span>
+    <span class="connection-labels"><strong>Local PostgreSQL</strong><small>project_dev</small></span>
+    <span class="online-indicator" aria-label="Sample connection"></span>
+  </div>
+  <div class="resource-tree">
+    <div class="tree-row schema-row"><span class="tree-caret">⌄</span><span class="schema-icon">▱</span><span>public</span></div>
+    <a class="tree-row table-row" routerLink="/tables/customers/data" routerLinkActive="selected">
+      <span class="table-icon">▦</span><span>customers</span>
+    </a>
+    <div class="tree-row table-row inactive-resource"><span class="table-icon">▦</span><span>invoices</span></div>
+    <div class="tree-row table-row inactive-resource"><span class="table-icon">▦</span><span>subscriptions</span></div>
+  </div>
+  <div class="sidebar-bottom">
+    <div class="demo-note"><span class="demo-note-dot"></span>Sample data only</div>
+    <div class="sidebar-footer"><span class="kbd">⌘ K</span><span>Quick actions</span></div>
+  </div>
+</aside>

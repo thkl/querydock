@@ -1,0 +1,16 @@
+<nav class="tab-strip" aria-label="Workspace tabs">
+  <a class="work-tab" routerLink="/tables/customers/data" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }">
+    <span class="tab-grid-icon">▦</span><span>customers</span><span class="tab-close">×</span>
+  </a>
+  <a class="work-tab" routerLink="/query" routerLinkActive="active">
+    <span class="tab-query-icon">›_</span><span>Query 1</span><span class="tab-close">×</span>
+  </a>
+  <a class="work-tab" routerLink="/runbook" routerLinkActive="active">
+    <span class="tab-runbook-icon">▤</span><span>Runbook</span>
+    @if (drafts.pendingCellEdits().length) { <span class="tab-dot"></span> }
+    <span class="tab-close">×</span>
+  </a>
+  <span class="new-tab-button" aria-hidden="true">+</span>
+  <div class="tab-strip-spacer"></div>
+  <span class="workspace-mode"><span class="lock-icon">⌑</span> Development</span>
+</nav>

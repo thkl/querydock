@@ -1,0 +1,8 @@
+<section class="placeholder-view">
+  <div class="placeholder-icon runbook-placeholder-icon">▤</div>
+  <p class="eyebrow">DEVELOPMENT RUNBOOK</p>
+  <h1>Your reviewed changes will live here</h1>
+  <p>Runbooks remain browser-owned. The starter grid records demo edits only in memory and does not stage or apply SQL.</p>
+  @if (drafts.pendingCellEdits().length) { <p class="pending-summary">{{ drafts.pendingCellEdits().length }} sample cell edits are waiting in memory.</p> }
+  <a class="subtle-button" routerLink="/tables/customers/data">Back to customers</a>
+</section>
