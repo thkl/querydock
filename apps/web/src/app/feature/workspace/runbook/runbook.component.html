@@ -3,32 +3,80 @@
     <div>
       <p class="eyebrow">DEVELOPMENT RUNBOOK</p>
       <h1>Review SQL changes</h1>
-      <p class="page-description">Inspect migration SQL before it is applied to your development database.</p>
+      <p class="page-description">Review generated migration SQL before applying it to your development database.</p>
     </div>
-    <span class="review-badge"><span class="review-icon" aria-hidden="true">◈</span> Review only</span>
+    <span class="review-badge"><span class="review-icon" aria-hidden="true">◈</span> {{ runbook.runbook()?.applyOutcomeUnknown ? 'OUTCOME UNKNOWN' : 'REVIEW REQUIRED' }}</span>
   </header>
 
-  @if (drafts.pendingCellEdits().length) {
-    <div class="draft-notice" role="status">
-      <span class="notice-dot"></span>
-      {{ drafts.pendingCellEdits().length }} sample cell edits are held in memory. They have not been staged in this runbook.
-    </div>
+  @if (!runbook.storageAvailable()) {
+    <div class="draft-notice" role="alert">IndexedDB is unavailable. Runbook changes may be lost if this page reloads.</div>
   }
 
-  <section class="preview-card" aria-label="Read-only SQL preview">
-    <div class="preview-toolbar">
-      <div class="preview-title"><span class="sql-mark" aria-hidden="true">SQL</span><span>Pending SQL preview</span></div>
-      <span class="readonly-pill"><span aria-hidden="true">▣</span> READ ONLY</span>
-    </div>
-    <qd-sql-editor class="preview-editor" [value]="previewSql" [readOnly]="true" ariaLabel="Read-only pending SQL preview" />
-    <footer class="preview-status">
-      <span>No statements staged</span>
-      <span>Preview only · not executed</span>
-    </footer>
-  </section>
+  @if (runbook.error()) {
+    <div class="runbook-error" role="alert">{{ runbook.error() }}</div>
+  }
 
-  <div class="runbook-actions">
-    <a class="subtle-button" routerLink="/tables/customers/data">Back to customers</a>
-    <button class="apply-button" type="button" disabled title="Applying reviewed SQL is not implemented yet">Apply to development</button>
-  </div>
+  @if (runbook.runbook(); as state) {
+    <div class="runbook-target">
+      <span>Target</span>
+      <strong>{{ state.target.database }}</strong>
+      <code>{{ state.target.host }}:{{ state.target.port }} · {{ state.schema }}.{{ state.table }}</code>
+    </div>
+
+    @if (state.applyOutcomeUnknown) {
+      <div class="unknown-notice" role="alert">
+        The server did not confirm this batch. Do not retry automatically. Inspect the database and reconcile this runbook manually before continuing.
+        <div class="reconcile-actions">
+          <button class="subtle-button" type="button" [disabled]="runbook.reconciling()" (click)="resolveUnknown('applied')">I verified it was applied</button>
+          <button class="subtle-button" type="button" [disabled]="runbook.reconciling()" (click)="resolveUnknown('notApplied')">I verified it was not applied</button>
+        </div>
+      </div>
+    }
+
+    @if (state.appliedBatches.length) {
+      <section class="applied-card" aria-label="Applied SQL batches">
+        <header class="applied-heading">
+          <div><h2>Applied SQL</h2><p>{{ runbook.appliedStatements().length }} confirmed statements</p></div>
+          <span class="applied-badge">CONFIRMED</span>
+        </header>
+        @for (batch of state.appliedBatches; track batch.appliedAt) {
+          <pre>{{ batch.statements.join('\n\n') }}</pre>
+        }
+      </section>
+    }
+
+    <section class="preview-card" aria-label="Read-only SQL preview">
+      <div class="preview-toolbar">
+        <div class="preview-title"><span class="sql-mark" aria-hidden="true">SQL</span><span>Pending SQL preview</span></div>
+        <span class="readonly-pill"><span aria-hidden="true">▣</span> READ ONLY</span>
+      </div>
+      <qd-sql-editor class="preview-editor" [value]="runbook.previewSql()" [readOnly]="true" ariaLabel="Read-only pending SQL preview" />
+      <footer class="preview-status">
+        <span>{{ state.preview?.statements?.length ?? 0 }} pending statements</span>
+        <span>Baseline {{ state.baseline.fingerprint.slice(0, 12) }} · not executed</span>
+      </footer>
+    </section>
+
+    <div class="runbook-actions">
+      <a class="subtle-button" [routerLink]="['/tables', state.table, 'schema']" [queryParams]="{ schema: state.schema }">Back to table</a>
+      <div class="runbook-action-group">
+        @if (state.operations.length) {
+          <button class="subtle-button" type="button" [disabled]="runbook.applying() || state.applyOutcomeUnknown" (click)="discard()">Discard pending</button>
+        }
+        @if (runbook.appliedStatements().length) {
+          <button class="subtle-button" type="button" [disabled]="state.applyOutcomeUnknown" (click)="export()">Export applied SQL</button>
+        }
+        <button class="subtle-button" type="button" [disabled]="state.applyOutcomeUnknown || runbook.applying()" (click)="clearRunbook()">Clear runbook</button>
+        <button class="apply-button" type="button" [disabled]="!runbook.canApply() || runbook.applying()" (click)="apply()">
+          {{ runbook.applying() ? 'Applying…' : 'Apply to development' }}
+        </button>
+      </div>
+    </div>
+  } @else {
+    <section class="empty-runbook">
+      <span class="sql-mark" aria-hidden="true">SQL</span>
+      <h2>No schema changes staged</h2>
+      <p>Choose a table in the sidebar and stage a nullable field to preview its migration here.</p>
+    </section>
+  }
 </section>

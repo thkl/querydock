@@ -119,7 +119,7 @@ Example: add a nullable field, backfill its values, then make it non-nullable.
 - The client submits the reviewed pending batch; the server executes it and returns results.
 - The browser records successfully applied SQL and execution results.
 - Applied SQL is immutable; subsequent edits form another pending batch within the runbook.
-- Check for schema drift before applying; the stateless request contract for this remains to be designed.
+- The initial PostgreSQL Apply flow locks the target table, checks the current fingerprint against the submitted baseline, regenerates statements from structured operations, and compares them with the reviewed SQL before executing the regenerated statements.
 
 ### MVP transaction behavior
 

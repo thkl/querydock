@@ -65,6 +65,60 @@
 .topbar-spacer {
   flex: 1;
 }
+.runbook-notice {
+  display: inline-flex;
+  min-width: 0;
+  max-width: min(36vw, 390px);
+  height: 34px;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  overflow: hidden;
+  border: 1px solid var(--color-draft-border);
+  border-radius: 8px;
+  background: var(--color-draft-subtle);
+  color: var(--color-draft);
+  font-size: .82em;
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.runbook-notice:hover,
+.runbook-notice:focus-visible {
+  border-color: var(--color-draft);
+  background: color-mix(in srgb, var(--color-draft) 16%, transparent);
+}
+.runbook-notice--unknown {
+  border-color: color-mix(in srgb, var(--color-danger) 38%, var(--color-border));
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+}
+.runbook-notice-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: currentColor;
+}
+.runbook-notice-count {
+  display: inline-grid;
+  min-width: 19px;
+  height: 19px;
+  flex: 0 0 auto;
+  place-items: center;
+  padding: 0 5px;
+  border-radius: 10px;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+  font-variant-numeric: tabular-nums;
+}
+.runbook-notice-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.runbook-notice-compact {
+  display: none;
+}
 .connection-summary {
   display: flex;
   height: 34px;
@@ -133,5 +187,17 @@
     gap: 5px;
     padding: 0 7px;
     font-size: 1em;
+  }
+  .runbook-notice {
+    max-width: 122px;
+    gap: 5px;
+    padding: 0 7px;
+    font-size: .78em;
+  }
+  .runbook-notice-label {
+    display: none;
+  }
+  .runbook-notice-compact {
+    display: inline;
   }
 }

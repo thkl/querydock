@@ -1,0 +1,36 @@
+@if (confirmation.request(); as request) {
+  <div class="confirmation-backdrop" (click)="cancel()" (keydown)="handleKeydown($event)">
+    <section
+      class="confirmation-dialog"
+      [class.is-warning]="request.intent === 'warning'"
+      [class.is-danger]="request.intent === 'danger'"
+      [attr.role]="request.intent === 'default' || !request.intent ? 'dialog' : 'alertdialog'"
+      aria-modal="true"
+      aria-labelledby="confirmation-title"
+      aria-describedby="confirmation-message"
+      (click)="$event.stopPropagation()"
+    >
+      <div class="confirmation-dialog__mark" aria-hidden="true">
+        @if (request.intent === 'danger') { ! } @else { ? }
+      </div>
+      <p class="confirmation-dialog__eyebrow">Please confirm</p>
+      <h2 id="confirmation-title">{{ request.title }}</h2>
+      <p id="confirmation-message" class="confirmation-dialog__message">{{ request.message }}</p>
+      <div class="confirmation-dialog__actions">
+        <button #cancelButton class="confirmation-dialog__cancel" type="button" (click)="cancel()">
+          {{ request.cancelLabel ?? 'Cancel' }}
+        </button>
+        <button
+          #confirmButton
+          class="confirmation-dialog__confirm"
+          [class.is-danger]="request.intent === 'danger'"
+          [class.is-warning]="request.intent === 'warning'"
+          type="button"
+          (click)="confirm()"
+        >
+          {{ request.confirmLabel }}
+        </button>
+      </div>
+    </section>
+  </div>
+}

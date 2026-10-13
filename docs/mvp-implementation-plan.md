@@ -1,6 +1,6 @@
 # QueryDock — MVP Implementation Plan
 
-Status: in progress. The workspace, editor, and grid shell are in place; the initial Milestone B PostgreSQL connection and read-only schema inspection slice is implemented. Data browsing and schema changes are still disconnected.
+Status: in progress. The initial Milestone B PostgreSQL connection and read-only inspection slice is implemented. Milestone C now has an initial vertical slice for adding a nullable field through preview, transactional apply, and SQL export; broader schema editing and data browsing remain disconnected.
 Date: 2026-10-13.
 
 References:
@@ -97,7 +97,15 @@ Do not adopt aGrid as final until this check passes. Address any gaps explicitly
 - Reload restores runbook state without persisting credentials or fetched database rows.
 - Export executes successfully against an equivalent initial test schema and reproduces intended changes.
 
-Before implementing Apply, choose how the server validates a submitted reviewed plan without persisted previews: deterministic revalidation or an authenticated stateless envelope. A plain client-provided hash is insufficient proof.
+The initial Apply contract uses deterministic server-side revalidation rather than a client-provided hash: the server locks the target, checks its baseline fingerprint, regenerates SQL from the structured operations, and requires an exact match with the reviewed statement list.
+
+### Initial implementation slice
+
+- Add a nullable field using a restricted PostgreSQL type list.
+- Generate SQL from structured operations on the server; lock the table, verify its baseline fingerprint, regenerate and compare the reviewed statements, then apply them in one transaction.
+- Keep the target, schema baseline, pending operations, and confirmed applied statements in browser IndexedDB. Do not persist credentials or fetched rows.
+- Mark interrupted Apply requests as unknown and require explicit manual reconciliation before retrying or exporting that batch.
+- Current UI scope is one active table runbook and nullable field additions; support for other field operations and multi-table batches remains future work in Milestone C.
 
 ## 6. Milestone D — Complete MVP structure editing
 

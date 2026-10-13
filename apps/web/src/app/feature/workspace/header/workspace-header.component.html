@@ -5,6 +5,21 @@
   </a>
   <span class="environment-tag">LOCAL PREVIEW</span>
   <div class="topbar-spacer"></div>
+  @if (runbook.noticeLabel(); as notice) {
+    <a class="runbook-notice"
+      routerLink="/runbook"
+      [class.runbook-notice--unknown]="runbook.runbook()?.applyOutcomeUnknown"
+      [attr.aria-label]="notice"
+      [attr.title]="notice">
+      <span class="runbook-notice-dot" aria-hidden="true"></span>
+      @if (runbook.pendingOperationCount()) {
+        <span class="runbook-notice-count">{{ runbook.pendingOperationCount() }}</span>
+      }
+      <span class="runbook-notice-label">{{ notice }}</span>
+      <span class="runbook-notice-compact">Runbook</span>
+      <span aria-hidden="true">→</span>
+    </a>
+  }
   <div class="connection-summary">
     <span class="connection-dot"></span><span>PostgreSQL</span><span class="connection-divider">/</span>
     <span class="muted">project_dev</span><span class="chevron">⌄</span>

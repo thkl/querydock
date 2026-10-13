@@ -13,7 +13,7 @@
   flex-direction: column;
   gap: 18px;
   overflow: auto;
-  padding: 26px 0px 20px;
+  padding: 26px 10px 20px 0px;
 }
 
 .page-heading {
@@ -65,6 +65,17 @@ h1 {
   letter-spacing: .08em;
 }
 
+.stage-error,
+.storage-warning {
+  margin: 12px 16px;
+  color: var(--color-danger);
+  font-size: .85em;
+}
+
+.storage-warning {
+  color: var(--color-warning);
+}
+
 .structure-card {
   min-width: 0;
   overflow: hidden;
@@ -72,6 +83,11 @@ h1 {
   border-radius: 12px;
   background: var(--color-surface);
   box-shadow: var(--shadow-glass);
+  height: 60%;
+}
+
+.constraints-card {
+  height: 30%
 }
 
 .card-heading {
@@ -95,6 +111,17 @@ h1 {
   font-size: .88em;
 }
 
+.card-heading .fields-instructions {
+  margin-top: 6px;
+  color: var(--color-muted-light);
+  font-size: .8em;
+}
+
+.fields-instructions strong {
+  color: var(--color-foreground);
+  font-weight: 650;
+}
+
 .metadata-label {
   color: var(--color-muted-light);
   font-size: .72em;
@@ -102,165 +129,47 @@ h1 {
   letter-spacing: .09em;
 }
 
-.table-scroll {
-  overflow-x: auto;
-}
-
-table {
-  width: 100%;
-  min-width: 660px;
-  border-collapse: collapse;
-  text-align: left;
-}
-
-thead {
-  background: rgb(255 255 255 / 2%);
-}
-
-th,
-td {
-  padding: 12px 18px;
-  border-bottom: 1px solid var(--color-border);
-  vertical-align: middle;
-}
-
-thead th {
-  color: var(--color-muted);
-  font-size: .75em;
-  font-weight: 700;
-  letter-spacing: .07em;
-  text-transform: uppercase;
-}
-
-tbody th {
-  font-weight: 600;
-}
-
-tbody th,
-tbody td {
-  color: var(--color-foreground);
-  font-size: .91em;
-}
-
-tbody tr:last-child th,
-tbody tr:last-child td {
-  border-bottom: 0;
-}
-
-.field-name {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-}
-
-code {
-  color: var(--sql-color-type);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: .9em;
-  overflow-wrap: anywhere;
-}
-
-.type-detail {
-  color: var(--color-muted);
-}
-
-.type-identity {
-  display: block;
-  margin-top: 3px;
-  color: var(--color-muted-light);
-  font-size: .78em;
-}
-
-.nullability {
-  color: var(--color-muted);
-  font-size: .78em;
-  font-weight: 700;
-  letter-spacing: .04em;
-}
-
-.nullability.required {
-  color: var(--color-warning);
-}
-
-.value-badge {
-  display: inline-flex;
-  padding: 4px 7px;
-  border: 1px solid var(--color-border);
-  border-radius: 5px;
-  background: var(--color-chip);
-  color: var(--color-accent-strong);
-  font-size: .72em;
-  font-weight: 700;
-  letter-spacing: .03em;
-}
-
-.default-expression {
-  color: var(--sql-color-string);
-}
-
-.empty-value {
-  color: var(--color-muted-light);
-}
-
-.empty-table {
-  padding: 22px;
-  color: var(--color-muted);
-  text-align: center;
-}
-
-.constraint-list {
-  display: grid;
-}
-
-.constraint-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 13px;
-  padding: 14px 18px;
-  border-bottom: 1px solid var(--color-border);
-}
-
-.constraint-row:last-child {
-  border-bottom: 0;
-}
-
-.constraint-kind {
-  flex: 0 0 auto;
-  min-width: 83px;
-  padding: 5px 7px;
-  border: 1px solid var(--color-border);
-  border-radius: 5px;
-  background: var(--color-chip);
-  color: var(--color-warning);
-  font-size: .72em;
-  font-weight: 700;
-  text-align: center;
-  text-transform: uppercase;
-}
-
-.constraint-content {
-  display: grid;
+.schema-grid {
   min-width: 0;
-  gap: 5px;
+  overflow: auto;
+  padding: 1px;
 }
 
-.constraint-content strong {
-  color: var(--color-foreground);
-  font-size: .9em;
+.schema-grid--fields {
+  height: calc(100% - 8em);
 }
 
-.constraint-content code {
+.schema-grid--constraints {
+  max-height: 290px;
+}
+
+.schema-grid agrid {
+  min-width: 820px;
+  min-height: 150px;
+}
+
+.schema-grid--constraints agrid {
+  min-width: 920px;
+  min-height: 118px;
+}
+
+.draft-caption {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 16px 0;
   color: var(--color-muted);
-}
-
-.constraint-content small {
-  color: var(--color-muted-light);
   font-size: .82em;
+  height: 2.5em;
 }
 
-.empty-constraints {
-  margin: 0;
-  padding: 20px;
-  color: var(--color-muted);
-  font-size: .9em;
+.draft-marker {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--color-draft);
+  box-shadow: var(--shadow-draft-glow);
 }
 
 .schema-footer {
@@ -356,11 +265,6 @@ code {
 
   .card-heading {
     padding: 14px;
-  }
-
-  th,
-  td {
-    padding: 11px 13px;
   }
 
   .schema-footer {

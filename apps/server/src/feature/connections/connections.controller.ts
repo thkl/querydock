@@ -2,10 +2,12 @@ import {
   BadRequestException,
   BadGatewayException,
   Body,
+  ConflictException,
   Controller,
   Delete,
   Get,
   HttpCode,
+  InternalServerErrorException,
   NotFoundException,
   Param,
   Post,
@@ -15,18 +17,20 @@ import {
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import {
+  migrationApplyRequestSchema,
+  migrationPreviewRequestSchema,
   postgresConnectRequestSchema,
   type ConnectResponse,
 } from '@querydock/contracts';
 import { ConnectionSessionsService } from './connection-sessions.service.js';
-import { PostgresAdapter, PostgresConnectionError } from '../postgres/postgres.adapter.js';
+import { MigrationPlanError, PostgresAdapter, PostgresConnectionError } from '../postgres/postgres.adapter.js';
 
-const readOnlyCapabilities = {
+const postgresCapabilities = {
   discoverResources: true,
   inspectTables: true,
   browseData: false,
   mutateData: false,
-  editSchema: false,
+  editSchema: true,
   executeSql: false,
 } as const;
 
@@ -61,7 +65,7 @@ export class ConnectionsController {
         username: parsed.data.username,
       },
       serverVersion: verified.serverVersion,
-      capabilities: readOnlyCapabilities,
+      capabilities: postgresCapabilities,
     });
   }
 
@@ -111,6 +115,42 @@ export class ConnectionsController {
     }
   }
 
+  @Post(':connectionId/migrations/preview')
+  @HttpCode(200)
+  async previewMigration(
+    @Param('connectionId') connectionId: string,
+    @Body() body: unknown,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const parsed = migrationPreviewRequestSchema.safeParse(body);
+    if (!parsed.success) throw new BadRequestException('Invalid schema migration preview request.');
+    const configuration = this.sessions.requireConnection(request, response, connectionId);
+    try {
+      return await this.postgres.previewMigration(configuration, parsed.data);
+    } catch (error) {
+      throw this.asMigrationException(error);
+    }
+  }
+
+  @Post(':connectionId/migrations/apply')
+  @HttpCode(200)
+  async applyMigration(
+    @Param('connectionId') connectionId: string,
+    @Body() body: unknown,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const parsed = migrationApplyRequestSchema.safeParse(body);
+    if (!parsed.success) throw new BadRequestException('Invalid schema migration apply request.');
+    const configuration = this.sessions.requireConnection(request, response, connectionId);
+    try {
+      return await this.postgres.applyMigration(configuration, parsed.data);
+    } catch (error) {
+      throw this.asMigrationException(error);
+    }
+  }
+
   @Delete(':connectionId')
   @HttpCode(204)
   disconnect(
@@ -126,5 +166,15 @@ export class ConnectionsController {
       ? error.safeMessage
       : 'The PostgreSQL request failed. Check the connection and database permissions.';
     return new BadGatewayException(message);
+  }
+
+  private asMigrationException(error: unknown): BadGatewayException | BadRequestException | ConflictException | NotFoundException | InternalServerErrorException {
+    if (error instanceof MigrationPlanError) {
+      if (error.kind === 'not-found') return new NotFoundException(error.message);
+      if (error.kind === 'drift') return new ConflictException(error.message);
+      if (error.kind === 'unknown') return new InternalServerErrorException(error.message);
+      return new BadRequestException(error.message);
+    }
+    return this.asSafeDatabaseException(error);
   }
 }

@@ -1,10 +1,21 @@
 import { computed, Injectable, signal } from '@angular/core';
 import type {
+  MigrationApplyRequest,
+  MigrationApplyResponse,
+  MigrationPreviewRequest,
+  MigrationPreviewResponse,
   ConnectResponse,
   PostgresConnectRequest,
   ResourceDescriptor,
   TableSnapshot,
 } from '@querydock/contracts';
+
+export class ApiRequestError extends Error {
+  constructor(message: string, readonly status: number | null) {
+    super(message);
+    this.name = 'ApiRequestError';
+  }
+}
 
 @Injectable({ providedIn: 'root' })
 export class ConnectionApiService {
@@ -83,6 +94,20 @@ export class ConnectionApiService {
     );
   }
 
+  previewMigration(connectionId: string, plan: MigrationPreviewRequest): Promise<MigrationPreviewResponse> {
+    return request<unknown>(`/api/connections/${encodeURIComponent(connectionId)}/migrations/preview`, {
+      method: 'POST',
+      body: JSON.stringify(plan),
+    }).then(parseMigrationPreview);
+  }
+
+  applyMigration(connectionId: string, plan: MigrationApplyRequest): Promise<MigrationApplyResponse> {
+    return request<unknown>(`/api/connections/${encodeURIComponent(connectionId)}/migrations/apply`, {
+      method: 'POST',
+      body: JSON.stringify(plan),
+    }).then(parseMigrationApply);
+  }
+
   private async restoreSessionConnections(): Promise<void> {
     try {
       const connections = await request<ConnectResponse[]>('/api/connections');
@@ -131,20 +156,56 @@ function errorMessage(error: unknown): string {
 }
 
 async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(url, {
-    ...init,
-    credentials: 'same-origin',
-    headers: {
-      ...(init.body ? { 'Content-Type': 'application/json' } : {}),
-      ...init.headers,
-    },
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...init,
+      credentials: 'same-origin',
+      headers: {
+        ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+        ...init.headers,
+      },
+    });
+  } catch (error) {
+    throw new ApiRequestError(errorMessage(error), null);
+  }
   const payload: unknown = await response.json().catch(() => null);
   if (!response.ok) {
     const message = typeof payload === 'object' && payload !== null && 'message' in payload
       ? payload.message
       : undefined;
-    throw new Error(typeof message === 'string' ? message : `Request failed (${response.status}).`);
+    throw new ApiRequestError(typeof message === 'string' ? message : `Request failed (${response.status}).`, response.status);
   }
   return payload as T;
+}
+
+function parseMigrationPreview(payload: unknown): MigrationPreviewResponse {
+  if (isRecord(payload)
+    && typeof payload['baselineFingerprint'] === 'string'
+    && Array.isArray(payload['statements']) && payload['statements'].every((statement) => typeof statement === 'string')
+    && Array.isArray(payload['warnings']) && payload['warnings'].every((warning) => typeof warning === 'string')) {
+    return payload as unknown as MigrationPreviewResponse;
+  }
+  throw new Error('The server returned an invalid migration preview.');
+}
+
+function parseMigrationApply(payload: unknown): MigrationApplyResponse {
+  const snapshot = isRecord(payload) ? payload['snapshot'] : undefined;
+  if (isRecord(payload)
+    && Array.isArray(payload['appliedStatements']) && payload['appliedStatements'].every((statement) => typeof statement === 'string')
+    && isRecord(snapshot)
+    && typeof snapshot['schema'] === 'string'
+    && typeof snapshot['name'] === 'string'
+    && typeof snapshot['kind'] === 'string'
+    && typeof snapshot['canAlter'] === 'boolean'
+    && typeof snapshot['fingerprint'] === 'string'
+    && Array.isArray(snapshot['fields'])
+    && Array.isArray(snapshot['constraints'])) {
+    return payload as unknown as MigrationApplyResponse;
+  }
+  throw new Error('The server did not return a valid confirmation for the migration.');
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }

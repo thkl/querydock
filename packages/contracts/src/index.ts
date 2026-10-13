@@ -81,9 +81,62 @@ export const tableSnapshotSchema = z.object({
   schema: z.string(),
   name: z.string(),
   kind: resourceDescriptorSchema.shape.kind,
+  canAlter: z.boolean(),
   fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
   fields: z.array(tableFieldDescriptorSchema),
   constraints: z.array(tableConstraintDescriptorSchema),
 });
 
 export type TableSnapshot = z.infer<typeof tableSnapshotSchema>;
+
+export const nullableFieldTypeSchema = z.enum([
+  'text',
+  'integer',
+  'bigint',
+  'boolean',
+  'uuid',
+  'date',
+  'timestamptz',
+  'jsonb',
+  'numeric',
+]);
+
+export type NullableFieldType = z.infer<typeof nullableFieldTypeSchema>;
+
+export const addNullableFieldOperationSchema = z.object({
+  kind: z.literal('addNullableField'),
+  name: z.string().trim().min(1).max(63),
+  type: nullableFieldTypeSchema,
+});
+
+export type AddNullableFieldOperation = z.infer<typeof addNullableFieldOperationSchema>;
+
+export const migrationPreviewRequestSchema = z.object({
+  schema: z.string().trim().min(1).max(63),
+  table: z.string().trim().min(1).max(63),
+  baselineFingerprint: tableSnapshotSchema.shape.fingerprint,
+  operations: z.array(addNullableFieldOperationSchema).min(1).max(50),
+});
+
+export type MigrationPreviewRequest = z.infer<typeof migrationPreviewRequestSchema>;
+
+export const migrationPreviewResponseSchema = z.object({
+  baselineFingerprint: tableSnapshotSchema.shape.fingerprint,
+  statements: z.array(z.string()),
+  warnings: z.array(z.string()),
+});
+
+export type MigrationPreviewResponse = z.infer<typeof migrationPreviewResponseSchema>;
+
+export const migrationApplyRequestSchema = migrationPreviewRequestSchema.extend({
+  reviewedStatements: z.array(z.string().max(2048)).min(1).max(50),
+});
+
+export type MigrationApplyRequest = z.infer<typeof migrationApplyRequestSchema>;
+
+export const migrationApplyResponseSchema = z.object({
+  appliedStatements: z.array(z.string()),
+  snapshot: tableSnapshotSchema,
+});
+
+export type MigrationApplyResponse = z.infer<typeof migrationApplyResponseSchema>;

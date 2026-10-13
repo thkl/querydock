@@ -4,12 +4,13 @@ import { WorkspaceHeaderComponent } from '../header/workspace-header.component';
 import { WorkspaceSidebarComponent } from '../sidebar/workspace-sidebar.component';
 import { WorkspaceTabsComponent } from '../workspace-tabs/workspace-tabs.component';
 import { ConnectionDialogComponent } from '../connections/connection-dialog.component';
+import { ConfirmationDialogHostComponent } from '../confirmation/confirmation-dialog-host.component';
 
 @Component({
   selector: 'qd-workspace-shell',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [RouterOutlet, WorkspaceHeaderComponent, WorkspaceSidebarComponent, WorkspaceTabsComponent, ConnectionDialogComponent],
+  imports: [RouterOutlet, WorkspaceHeaderComponent, WorkspaceSidebarComponent, WorkspaceTabsComponent, ConnectionDialogComponent, ConfirmationDialogHostComponent],
   templateUrl: './workspace-shell.component.html',
   styleUrl: './workspace-shell.component.css',
 })
