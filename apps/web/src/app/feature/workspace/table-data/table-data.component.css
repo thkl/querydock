@@ -17,7 +17,7 @@ a {
     min-height: 0;
     flex: 1;
     flex-direction: column;
-    padding: 0 25px 15px;
+    padding: 0 0px 15px;
 }
 
 .breadcrumb-row {

@@ -1,6 +1,6 @@
 # QueryDock — Shared Contracts Plan
 
-Status: proposed contract design, not implementation.  
+Status: connection, resource, and table-inspection schemas are implemented in `packages/contracts`; remaining draft, preview, apply, and runbook contracts below are proposals.
 Date: 2026-10-13.  
 Architecture reference: [architecture decisions](architecture-decisions.md).
 

@@ -1,7 +1,180 @@
-:host { display: flex; min-height: 0; flex: 1; }
-.placeholder-view { display: flex; width: min(540px, calc(100% - 48px)); align-self: center; flex: 1; flex-direction: column; align-items: flex-start; justify-content: center; margin: 0 auto; }
-.placeholder-icon { display: grid; width: 48px; height: 48px; place-items: center; margin-bottom: 23px; border: 1px solid var(--color-border-strong); border-radius: 13px; background: linear-gradient(145deg, rgb(102 239 189 / 12%), var(--color-surface)); box-shadow: var(--shadow-glass); color: var(--color-accent); font-size: 1.25em; }
-.eyebrow { margin: 0 0 8px; color: var(--color-accent); font-size: 1em; font-weight: 750; letter-spacing: .12em; }
-h1 { margin: 0 0 10px; color: var(--color-foreground); font-size: 1.75em; letter-spacing: -.045em; }
-p:not(.eyebrow) { max-width: 420px; margin: 0 0 18px; color: var(--color-muted); font-size: 1em; line-height: 1.7; }
-.subtle-button { display: inline-flex; min-height: 34px; align-items: center; padding: 0 12px; border: 1px solid var(--color-border-strong); border-radius: 8px; background: var(--color-surface); color: var(--color-foreground); font-size: 1em; text-decoration: none; }
+:host {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+}
+
+.query-workspace {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 22px;
+  padding: 24px 0px 18px;
+}
+
+.page-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.eyebrow {
+  margin: 0 0 7px;
+  color: var(--color-accent);
+  font-size: .75em;
+  font-weight: 750;
+  letter-spacing: .12em;
+}
+
+h1 {
+  margin: 0;
+  color: var(--color-foreground);
+  font-size: 1.75em;
+  letter-spacing: -.045em;
+}
+
+.page-description {
+  margin: 6px 0 0;
+  color: var(--color-muted);
+  font-size: 1em;
+}
+
+.connection-badge {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 999px;
+  background: rgb(17 32 34 / 68%);
+  color: var(--color-foreground);
+  font-size: .875em;
+}
+
+.connection-dot,
+.status-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  box-shadow: 0 0 10px rgb(102 239 189 / 50%);
+}
+
+.editor-card {
+  display: flex;
+  min-height: 320px;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 12px;
+  background: var(--color-surface-solid);
+  box-shadow: var(--shadow-glass);
+}
+
+.editor-toolbar {
+  display: flex;
+  min-height: 52px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.editor-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--color-foreground);
+  font-size: .875em;
+  font-weight: 650;
+}
+
+.sql-mark {
+  color: var(--color-accent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+  font-size: .875em;
+  font-weight: 750;
+  letter-spacing: .04em;
+}
+
+.run-button {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 13px;
+  border: 1px solid var(--color-accent);
+  border-radius: 8px;
+  background: var(--color-accent);
+  color: var(--color-accent-ink);
+  cursor: not-allowed;
+  font: inherit;
+  font-size: .875em;
+  font-weight: 700;
+  opacity: .56;
+}
+
+.sql-editor {
+  display: block;
+  min-height: 0;
+  flex: 1;
+}
+
+.editor-status {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  gap: 18px;
+  padding: 0 14px;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-muted);
+  font-size: .75em;
+}
+
+.editor-status span:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  flex-basis: 6px;
+}
+
+.execution-note {
+  margin: -10px 0 0;
+  color: var(--color-muted);
+  font-size: .875em;
+}
+
+@media (max-width: 680px) {
+  .query-workspace {
+    gap: 16px;
+    padding: 18px 12px 12px;
+  }
+
+  .page-heading {
+    flex-direction: column;
+  }
+
+  .editor-card {
+    min-height: 260px;
+  }
+
+  .editor-status {
+    justify-content: space-between;
+    gap: 8px;
+    padding: 0 9px;
+  }
+}

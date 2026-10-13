@@ -1,6 +1,6 @@
 # QueryDock — Architecture Decisions
 
-Status: architecture decisions; Milestone A scaffold and grid shell started.  
+Status: architecture decisions; workspace scaffold and initial PostgreSQL connection/schema inspection slice implemented.
 Last updated: 2026-10-13.  
 This document consolidates the original design notes and subsequent agreed decisions. Where they differ, this document reflects the current direction.
 

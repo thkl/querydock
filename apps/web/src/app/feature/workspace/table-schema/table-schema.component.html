@@ -1,7 +1,111 @@
-<section class="placeholder-view">
-  <div class="placeholder-icon schema-placeholder-icon">☷</div>
-  <p class="eyebrow">TABLE STRUCTURE</p>
-  <h1>Schema editor comes next</h1>
-  <p>This route reserves a feature page for field and constraint editing. No database schema is loaded or changed in this scaffold.</p>
-  <a class="subtle-button" routerLink="/tables/customers/data">Back to table data</a>
+<section class="schema-workspace">
+  @if (!connections.activeConnection()) {
+    <div class="schema-state">
+      <div class="placeholder-icon schema-placeholder-icon" aria-hidden="true">☷</div>
+      <p class="eyebrow">TABLE STRUCTURE</p>
+      <h1>Connect to inspect a table</h1>
+      <p>Connect to a PostgreSQL database to load its visible fields and constraints. This page is read only.</p>
+      <button class="subtle-button" type="button" (click)="connections.openConnectDialog()">Add connection</button>
+    </div>
+  } @else if (loading()) {
+    <div class="schema-state" role="status">
+      <p class="eyebrow">TABLE STRUCTURE</p>
+      <h1>Loading schema…</h1>
+      <p>Reading metadata from {{ connections.activeConnection()?.target.database }}.</p>
+    </div>
+  } @else if (error()) {
+    <div class="schema-state" role="alert">
+      <p class="eyebrow">TABLE STRUCTURE</p>
+      <h1>Could not load this table</h1>
+      <p>{{ error() }}</p>
+      <a class="subtle-button" routerLink="/tables/customers/data">Back to workspace</a>
+    </div>
+  } @else if (snapshot(); as table) {
+    <header class="page-heading">
+      <div>
+        <p class="eyebrow">TABLE STRUCTURE <span class="separator">/</span> {{ table.schema }}</p>
+        <h1>{{ table.name }}</h1>
+        <p class="page-description">Read-only metadata from {{ connections.activeConnection()?.target.database }} · PostgreSQL</p>
+      </div>
+      <span class="readonly-badge"><span aria-hidden="true">◈</span> INSPECT ONLY</span>
+    </header>
+
+    <section class="structure-card" aria-labelledby="fields-title">
+      <header class="card-heading">
+        <div>
+          <h2 id="fields-title">Fields</h2>
+          <p>{{ table.fields.length }} {{ table.fields.length === 1 ? 'field' : 'fields' }}</p>
+        </div>
+        <span class="metadata-label">CURRENT STRUCTURE</span>
+      </header>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr><th scope="col">Name</th><th scope="col">Type</th><th scope="col">Nullable</th><th scope="col">Default / generation</th></tr>
+          </thead>
+          <tbody>
+            @for (field of table.fields; track field.name) {
+              <tr>
+                <th scope="row"><span class="field-name">{{ field.name }}</span></th>
+                <td>
+                  <code>{{ field.dataType }}</code>
+                  @if (field.characterMaximumLength !== null) { <span class="type-detail">({{ field.characterMaximumLength }})</span> }
+                  @if (field.dataType === 'numeric' && field.numericPrecision !== null) { <span class="type-detail">({{ field.numericPrecision }}{{ field.numericScale !== null ? ', ' + field.numericScale : '' }})</span> }
+                  <span class="type-identity">{{ field.typeSchema }}.{{ field.typeName }}</span>
+                </td>
+                <td><span class="nullability" [class.required]="!field.nullable">{{ field.nullable ? 'YES' : 'NO' }}</span></td>
+                <td>
+                  @if (field.identityGeneration) {
+                    <span class="value-badge">IDENTITY {{ field.identityGeneration === 'always' ? 'ALWAYS' : 'BY DEFAULT' }}</span>
+                  } @else if (field.generated) {
+                    <span class="value-badge">GENERATED</span>
+                    @if (field.generationExpression) { <code class="default-expression">{{ field.generationExpression }}</code> }
+                  } @else if (field.defaultExpression) {
+                    <code class="default-expression">{{ field.defaultExpression }}</code>
+                  } @else {
+                    <span class="empty-value">—</span>
+                  }
+                </td>
+              </tr>
+            } @empty {
+              <tr><td class="empty-table" colspan="4">No visible fields were returned.</td></tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="structure-card constraints-card" aria-labelledby="constraints-title">
+      <header class="card-heading">
+        <div>
+          <h2 id="constraints-title">Constraints</h2>
+          <p>{{ table.constraints.length }} {{ table.constraints.length === 1 ? 'constraint' : 'constraints' }}</p>
+        </div>
+        <span class="metadata-label">CURRENT STRUCTURE</span>
+      </header>
+      @if (table.constraints.length) {
+        <div class="constraint-list">
+          @for (constraint of table.constraints; track constraint.name) {
+            <article class="constraint-row">
+              <span class="constraint-kind">{{ constraint.kind }}</span>
+              <div class="constraint-content">
+                <strong>{{ constraint.name }}</strong>
+                <code>{{ constraint.definition }}</code>
+                @if (constraint.referencedSchema && constraint.referencedTable) {
+                  <small>References {{ constraint.referencedSchema }}.{{ constraint.referencedTable }}({{ constraint.referencedFieldNames.join(', ') }})</small>
+                }
+              </div>
+            </article>
+          }
+        </div>
+      } @else {
+        <p class="empty-constraints">No constraints are visible for this resource.</p>
+      }
+    </section>
+
+    <footer class="schema-footer">
+      <span><span class="status-dot"></span> Read only · no schema changes are staged</span>
+      <code title="Baseline fingerprint">{{ table.fingerprint.slice(0, 12) }}</code>
+    </footer>
+  }
 </section>

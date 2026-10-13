@@ -1,0 +1,130 @@
+import {
+  BadRequestException,
+  BadGatewayException,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  NotFoundException,
+  Param,
+  Post,
+  Query,
+  Req,
+  Res,
+} from '@nestjs/common';
+import type { Request, Response } from 'express';
+import {
+  postgresConnectRequestSchema,
+  type ConnectResponse,
+} from '@querydock/contracts';
+import { ConnectionSessionsService } from './connection-sessions.service.js';
+import { PostgresAdapter, PostgresConnectionError } from '../postgres/postgres.adapter.js';
+
+const readOnlyCapabilities = {
+  discoverResources: true,
+  inspectTables: true,
+  browseData: false,
+  mutateData: false,
+  editSchema: false,
+  executeSql: false,
+} as const;
+
+@Controller('connections')
+export class ConnectionsController {
+  constructor(
+    private readonly sessions: ConnectionSessionsService,
+    private readonly postgres: PostgresAdapter,
+  ) {}
+
+  @Post()
+  async connect(
+    @Body() body: unknown,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ): Promise<ConnectResponse> {
+    const parsed = postgresConnectRequestSchema.safeParse(body);
+    if (!parsed.success) throw new BadRequestException('Invalid PostgreSQL connection settings.');
+
+    let verified;
+    try {
+      verified = await this.postgres.verifyConnection(parsed.data);
+    } catch (error) {
+      throw this.asSafeDatabaseException(error);
+    }
+    return this.sessions.addConnection(request, response, parsed.data, {
+      target: {
+        adapter: parsed.data.adapter,
+        host: parsed.data.host,
+        port: parsed.data.port,
+        database: parsed.data.database,
+        username: parsed.data.username,
+      },
+      serverVersion: verified.serverVersion,
+      capabilities: readOnlyCapabilities,
+    });
+  }
+
+  @Get()
+  listConnections(
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ): ConnectResponse[] {
+    return this.sessions.listConnections(request, response);
+  }
+
+  @Get(':connectionId/resources')
+  async listResources(
+    @Param('connectionId') connectionId: string,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const configuration = this.sessions.requireConnection(request, response, connectionId);
+    try {
+      return await this.postgres.listResources(configuration);
+    } catch (error) {
+      throw this.asSafeDatabaseException(error);
+    }
+  }
+
+  @Get(':connectionId/tables')
+  async inspectTable(
+    @Param('connectionId') connectionId: string,
+    @Query('schema') schema: unknown,
+    @Query('table') table: unknown,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    if (typeof schema !== 'string' || schema.length < 1 || schema.length > 63
+      || typeof table !== 'string' || table.length < 1 || table.length > 63) {
+      throw new BadRequestException('Provide a valid schema and table name.');
+    }
+
+    const configuration = this.sessions.requireConnection(request, response, connectionId);
+    try {
+      const snapshot = await this.postgres.inspectTable(configuration, schema, table);
+      if (!snapshot) throw new NotFoundException('The requested table was not found or is not visible to this user.');
+      return snapshot;
+    } catch (error) {
+      if (error instanceof NotFoundException) throw error;
+      throw this.asSafeDatabaseException(error);
+    }
+  }
+
+  @Delete(':connectionId')
+  @HttpCode(204)
+  disconnect(
+    @Param('connectionId') connectionId: string,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ): void {
+    this.sessions.removeConnection(request, response, connectionId);
+  }
+
+  private asSafeDatabaseException(error: unknown): BadGatewayException {
+    const message = error instanceof PostgresConnectionError
+      ? error.safeMessage
+      : 'The PostgreSQL request failed. Check the connection and database permissions.';
+    return new BadGatewayException(message);
+  }
+}

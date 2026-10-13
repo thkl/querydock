@@ -1,0 +1,59 @@
+@if (state.connectDialogOpen()) {
+  <div class="dialog-backdrop">
+    <section class="connection-dialog" role="dialog" aria-modal="true" aria-labelledby="connection-title">
+      <header class="dialog-header">
+        <div>
+          <p class="eyebrow">NEW CONNECTION</p>
+          <h2 id="connection-title">Connect to PostgreSQL</h2>
+        </div>
+        <button class="close-button" type="button" aria-label="Close connection dialog" (click)="state.closeConnectDialog()">×</button>
+      </header>
+
+      <p class="dialog-description">Credentials stay in the server’s expiring session memory and are never saved in the browser.</p>
+
+      <form autocomplete="on" (submit)="submit($event)">
+        <div class="form-grid">
+          <label class="field field-host">
+            <span>Host</span>
+            <input name="host" type="text" autocomplete="url" placeholder="localhost" value="localhost" required />
+          </label>
+          <label class="field">
+            <span>Port</span>
+            <input name="port" type="number" min="1" max="65535" value="5432" required />
+          </label>
+          <label class="field">
+            <span>Database</span>
+            <input name="database" type="text" autocomplete="off" placeholder="development" required />
+          </label>
+          <label class="field">
+            <span>Username</span>
+            <input name="username" type="text" autocomplete="username" placeholder="postgres" required />
+          </label>
+          <label class="field field-password">
+            <span>Password</span>
+            <input name="password" type="password" autocomplete="current-password" />
+          </label>
+          <label class="field field-ssl">
+            <span>SSL mode</span>
+            <select name="sslMode">
+              <option value="disable">Disable</option>
+              <option value="require">Require encryption</option>
+              <option value="verify-full">Verify server certificate</option>
+            </select>
+          </label>
+        </div>
+
+        @if (state.connectError()) {
+          <p class="form-error" role="alert">{{ state.connectError() }}</p>
+        }
+
+        <footer class="dialog-actions">
+          <button class="cancel-button" type="button" [disabled]="state.connecting()" (click)="state.closeConnectDialog()">Cancel</button>
+          <button class="connect-button" type="submit" [disabled]="state.connecting()">
+            @if (state.connecting()) { Connecting… } @else { Connect }
+          </button>
+        </footer>
+      </form>
+    </section>
+  </div>
+}

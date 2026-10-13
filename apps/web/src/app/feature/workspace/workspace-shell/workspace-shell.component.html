@@ -1,8 +1,27 @@
 <qd-workspace-header />
-<div class="workspace">
+<div class="workspace" [style.--sidebar-width.px]="sidebarWidth()">
   <qd-workspace-sidebar />
+  <div
+    class="workspace-splitter"
+    [class.is-resizing]="isResizingSidebar()"
+    role="separator"
+    aria-label="Resize sidebar"
+    aria-orientation="vertical"
+    aria-keyshortcuts="ArrowLeft ArrowRight Home End"
+    [attr.aria-valuemin]="minSidebarWidth"
+    [attr.aria-valuemax]="maxSidebarWidth"
+    [attr.aria-valuenow]="sidebarWidth()"
+    [attr.aria-valuetext]="sidebarWidth() + ' pixels'"
+    tabindex="0"
+    (pointerdown)="beginSidebarResize($event)"
+    (pointermove)="resizeSidebar($event)"
+    (pointerup)="endSidebarResize($event)"
+    (pointercancel)="endSidebarResize($event)"
+    (keydown)="resizeSidebarByKeyboard($event)"
+  ></div>
   <main class="main-area">
     <qd-workspace-tabs />
     <router-outlet />
   </main>
 </div>
+<qd-connection-dialog />

@@ -17,7 +17,7 @@ Run `pnpm install` to install dependencies. `pnpm dev` starts Angular and NestJS
 
 ## Coding Style & Naming Conventions
 
-Use TypeScript, external Angular templates, plain CSS, and semantic custom properties. Keep `AppComponent` limited to the root router outlet; put shell chrome and pages in feature components. Keep database behavior in adapters and avoid an ORM. Validate shared contracts with Zod, keep them independent of UI and driver code, and minimize dependencies.
+Use TypeScript, external Angular templates, plain CSS, and semantic custom properties. Set every Angular component to `ChangeDetectionStrategy.OnPush`; use signal-based `input()` and `output()` APIs instead of `@Input()` and `@Output()`. Keep `AppComponent` limited to the root router outlet; put shell chrome and pages in feature components. Keep database behavior in adapters and avoid an ORM. Validate shared contracts with Zod, keep them independent of UI and driver code, and minimize dependencies.
 
 ## Testing Guidelines
 

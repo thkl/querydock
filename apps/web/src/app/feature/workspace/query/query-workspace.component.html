@@ -1,7 +1,32 @@
-<section class="placeholder-view">
-  <div class="placeholder-icon query-placeholder-icon">›_</div>
-  <p class="eyebrow">QUERY WORKSPACE</p>
-  <h1>SQL editor comes next</h1>
-  <p>The query tab is ready. CodeMirror and query execution will be added in the next part of Milestone A.</p>
-  <a class="subtle-button" routerLink="/tables/customers/data">Back to customers</a>
+<section class="query-workspace">
+  <header class="page-heading">
+    <div>
+      <p class="eyebrow">QUERY WORKSPACE</p>
+      <h1>Query 1</h1>
+      <p class="page-description">Write and review PostgreSQL queries in your workspace.</p>
+    </div>
+    <span class="connection-badge"><span class="connection-dot"></span> PostgreSQL syntax</span>
+  </header>
+
+  <section class="editor-card" aria-label="SQL query editor">
+    <div class="editor-toolbar">
+      <div class="editor-title"><span class="sql-mark" aria-hidden="true">SQL</span><span>Query editor</span></div>
+      <button class="run-button" type="button" disabled title="Query execution will be available after PostgreSQL connections are implemented">
+        <span aria-hidden="true">▶</span> Run query
+      </button>
+    </div>
+    <qd-sql-editor
+      class="sql-editor"
+      [value]="query()"
+      ariaLabel="PostgreSQL query editor"
+      (valueChange)="query.set($event)"
+    />
+    <footer class="editor-status">
+      <span><span class="status-dot"></span> Editor ready</span>
+      <span>PostgreSQL</span>
+      <span>{{ query().split('\n').length }} lines</span>
+    </footer>
+  </section>
+
+  <p class="execution-note">Query execution is not connected yet. Your SQL stays in this browser tab.</p>
 </section>

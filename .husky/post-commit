@@ -1,0 +1,11 @@
+cd "$(git rev-parse --show-toplevel)"
+
+if ! command -v graphify >/dev/null 2>&1; then
+  echo "Commit created, but Graphify is not available on PATH; install Graphify and run 'graphify update'." >&2
+  exit 1
+fi
+
+if ! graphify update; then
+  echo "Commit created, but 'graphify update' failed. Review the error above and rerun it manually." >&2
+  exit 1
+fi

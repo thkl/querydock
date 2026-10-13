@@ -1,9 +1,10 @@
-import { Component, inject } from '@angular/core';
+import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
 import { AGRID_EDITOR_CONTEXT } from '@thkl/agrid';
 
 @Component({
   selector: 'qd-status-cell-editor',
   standalone: true,
+  changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './status-cell-editor.component.html',
   styleUrl: './status-cell-editor.component.css',
 })

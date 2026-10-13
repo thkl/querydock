@@ -16,6 +16,10 @@ pnpm dev
 
 The Angular app runs on `http://localhost:4200`. The NestJS API runs on `http://localhost:3000`; its health endpoint is `http://localhost:3000/api/health`. The Angular dev server proxies `/api` requests to the API.
 
+## Commit hooks
+
+`pnpm install` configures Husky. Install the Graphify CLI and generate the initial graph once before committing; the post-commit hook runs `graphify update` after each commit. Graph updates are produced after the commit and remain in the working tree for review and a later commit.
+
 ## Workspace commands
 
 - `pnpm build` builds the client, server, and shared contracts.

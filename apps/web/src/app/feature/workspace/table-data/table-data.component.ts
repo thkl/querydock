@@ -1,4 +1,4 @@
-import { Component, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, signal } from '@angular/core';
 import {
   AgridComponent,
   AgridControl,
@@ -20,6 +20,7 @@ const initialQuery: AgridServerQuery = {
 @Component({
   selector: 'qd-table-data',
   standalone: true,
+  changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [AgridComponent, RouterLink],
   templateUrl: './table-data.component.html',
   styleUrl: './table-data.component.css',

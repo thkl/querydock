@@ -7,9 +7,14 @@
     "node": ">=24.15.0"
   },
   "scripts": {
-    "dev": "pnpm --parallel --filter @querydock/server --filter @querydock/web dev",
+    "prepare": "husky",
+    "start:dev": "pnpm --parallel --filter @querydock/server --filter @querydock/web start:dev",
+    "start:debug": "pnpm --parallel --filter @querydock/server --filter @querydock/web start:debug",
     "build": "pnpm -r --if-present build",
     "typecheck": "pnpm -r --if-present typecheck",
     "check": "pnpm typecheck && pnpm build"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7"
   }
 }

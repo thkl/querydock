@@ -1,6 +1,6 @@
 # QueryDock — MVP Implementation Plan
 
-Status: in progress; Milestone A workspace scaffold and aGrid shell are implemented.  
+Status: in progress. The workspace, editor, and grid shell are in place; the initial Milestone B PostgreSQL connection and read-only schema inspection slice is implemented. Data browsing and schema changes are still disconnected.
 Date: 2026-10-13.
 
 References:

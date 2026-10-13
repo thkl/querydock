@@ -1,8 +1,34 @@
-<section class="placeholder-view">
-  <div class="placeholder-icon runbook-placeholder-icon">▤</div>
-  <p class="eyebrow">DEVELOPMENT RUNBOOK</p>
-  <h1>Your reviewed changes will live here</h1>
-  <p>Runbooks remain browser-owned. The starter grid records demo edits only in memory and does not stage or apply SQL.</p>
-  @if (drafts.pendingCellEdits().length) { <p class="pending-summary">{{ drafts.pendingCellEdits().length }} sample cell edits are waiting in memory.</p> }
-  <a class="subtle-button" routerLink="/tables/customers/data">Back to customers</a>
+<section class="runbook-workspace">
+  <header class="page-heading">
+    <div>
+      <p class="eyebrow">DEVELOPMENT RUNBOOK</p>
+      <h1>Review SQL changes</h1>
+      <p class="page-description">Inspect migration SQL before it is applied to your development database.</p>
+    </div>
+    <span class="review-badge"><span class="review-icon" aria-hidden="true">◈</span> Review only</span>
+  </header>
+
+  @if (drafts.pendingCellEdits().length) {
+    <div class="draft-notice" role="status">
+      <span class="notice-dot"></span>
+      {{ drafts.pendingCellEdits().length }} sample cell edits are held in memory. They have not been staged in this runbook.
+    </div>
+  }
+
+  <section class="preview-card" aria-label="Read-only SQL preview">
+    <div class="preview-toolbar">
+      <div class="preview-title"><span class="sql-mark" aria-hidden="true">SQL</span><span>Pending SQL preview</span></div>
+      <span class="readonly-pill"><span aria-hidden="true">▣</span> READ ONLY</span>
+    </div>
+    <qd-sql-editor class="preview-editor" [value]="previewSql" [readOnly]="true" ariaLabel="Read-only pending SQL preview" />
+    <footer class="preview-status">
+      <span>No statements staged</span>
+      <span>Preview only · not executed</span>
+    </footer>
+  </section>
+
+  <div class="runbook-actions">
+    <a class="subtle-button" routerLink="/tables/customers/data">Back to customers</a>
+    <button class="apply-button" type="button" disabled title="Applying reviewed SQL is not implemented yet">Apply to development</button>
+  </div>
 </section>
