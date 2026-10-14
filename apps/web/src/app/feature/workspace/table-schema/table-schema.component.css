@@ -137,7 +137,7 @@ h1 {
 .card-heading .fields-instructions {
   margin-top: 6px;
   color: var(--color-muted-light);
-  font-size: .8em;
+  font-size: 1.1em;
 }
 
 .fields-instructions--detail {
@@ -174,7 +174,7 @@ h1 {
 }
 
 .schema-grid agrid {
-  min-width: 820px;
+  min-width: 1465px;
   min-height: 150px;
 }
 

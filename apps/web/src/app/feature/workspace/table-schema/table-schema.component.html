@@ -18,7 +18,7 @@
       <p class="eyebrow">TABLE STRUCTURE</p>
       <h1>Could not load this table</h1>
       <p>{{ error() }}</p>
-      <a class="subtle-button" routerLink="/tables/customers/data">Back to workspace</a>
+      <a class="subtle-button" routerLink="/">Back to workspace</a>
     </div>
   } @else if (snapshot(); as table) {
     <header class="page-heading">
@@ -40,7 +40,7 @@
           <h2 id="fields-title">Fields</h2>
           <p>{{ displayFields().length }} {{ displayFields().length === 1 ? 'field' : 'fields' }}</p>
           @if (table.canAlter) {
-            <p class="fields-instructions">Use <strong>Add row</strong> to add a nullable field, or edit a supported field’s name, type, size, or default. Drafts appear in the runbook for review.</p>
+            <p class="fields-instructions">Use <strong>Add row</strong> to add a field, or edit a supported field’s name, type, size, default, or identity generation. New fields are nullable unless identity generation is selected. Identity generation is available for smallint, integer, and bigint fields.</p>
           }
         </div>
         <span class="metadata-label">{{ uncommittedSchemaChangeCount() ? 'BASELINE + DRAFTS' : 'CURRENT STRUCTURE' }}</span>
@@ -60,7 +60,7 @@
           (cellEdit)="onFieldCellEdit($event)"
           (recordEdit)="onFieldRecordEdit($event)" />
       </div>
-      <p class="fields-instructions fields-instructions--detail">Type parameters and defaults are checked by the connected database. Enter the parameters supported for the selected type; enter — to remove a default.</p>
+      <p class="fields-instructions fields-instructions--detail">Type parameters and defaults are checked by the connected database. Enter the parameters supported for the selected type; enter — to remove a default. Adding identity generation to an existing nullable field requires all existing values to be non-null.</p>
       @if (!runbook.storageAvailable()) {
         <p class="storage-warning" role="status">Browser storage is unavailable. Runbook changes will not survive a reload.</p>
       }
@@ -72,7 +72,7 @@
           <h2 id="constraints-title">Constraints</h2>
           <p>{{ visibleConstraintCount() }} {{ visibleConstraintCount() === 1 ? 'constraint' : 'constraints' }}</p>
           @if (table.editableConstraintKinds.length) {
-            <p class="fields-instructions">Use <strong>Add row</strong> to stage a primary key, unique constraint, or CHECK constraint. Enter comma-separated fields for keys, or a CHECK expression such as <code>quantity &gt; 0</code>. The database adapter validates field references and expression syntax. Mark an editable constraint for removal with its checkbox.</p>
+            <p class="fields-instructions">Use <strong>Add row</strong> to stage a primary key, unique constraint, or CHECK constraint. Enter comma-separated fields for keys, or a CHECK expression such as <code>quantity &gt; 0</code>. The database adapter validates field references and expression syntax. Delete an editable constraint row to stage its removal; delete a <strong>DROP PENDING</strong> row again to cancel that drop.</p>
           }
         </div>
         <span class="metadata-label">{{ uncommittedSchemaChangeCount() ? 'BASELINE + DRAFTS' : 'CURRENT STRUCTURE' }}</span>
@@ -81,7 +81,8 @@
         <agrid [provider]="constraintGridProvider()"
           (prepareAddRecord)="prepareConstraintDraft($event)"
           (cellEdit)="onConstraintCellEdit($event)"
-          (recordEdit)="onConstraintRecordEdit($event)" />
+          (recordEdit)="onConstraintRecordEdit($event)"
+          (rowRemoved)="onConstraintRowRemoved($event)" />
       </div>
     </section>
 

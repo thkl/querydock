@@ -55,6 +55,7 @@ export const tableFieldDescriptorSchema = z.object({
   dataType: z.string(),
   editableType: z.string().nullable(),
   editable: z.boolean(),
+  identityEditable: z.boolean(),
   characterMaximumLength: z.number().nullable(),
   numericPrecision: z.number().nullable(),
   numericScale: z.number().nullable(),
@@ -89,8 +90,15 @@ export const tableSnapshotSchema = z.object({
   kind: resourceDescriptorSchema.shape.kind,
   canAlter: z.boolean(),
   fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
-  editableFieldTypes: z.array(z.object({ value: z.string(), label: z.string(), typeSchema: z.string(), typeName: z.string() })),
+  editableFieldTypes: z.array(z.object({
+    value: z.string(),
+    label: z.string(),
+    typeSchema: z.string(),
+    typeName: z.string(),
+    identityGenerationSupported: z.boolean(),
+  })),
   editableConstraintKinds: z.array(z.object({ value: editableConstraintKindSchema, label: z.string() })),
+  editableIdentityGenerations: z.array(z.object({ value: z.enum(['none', 'always', 'byDefault']), label: z.string() })),
   fields: z.array(tableFieldDescriptorSchema),
   constraints: z.array(tableConstraintDescriptorSchema),
 });
@@ -111,6 +119,7 @@ export const addNullableFieldOperationSchema = z.object({
   numericPrecision: z.number().nullable().optional(),
   numericScale: z.number().nullable().optional(),
   defaultExpression: z.string().max(4096).nullable().optional(),
+  identityGeneration: z.enum(['always', 'byDefault']).nullable().optional(),
 });
 
 export type AddNullableFieldOperation = z.infer<typeof addNullableFieldOperationSchema>;
@@ -126,6 +135,7 @@ export const alterFieldOperationSchema = z.object({
   numericScale: z.number().nullable(),
   defaultExpression: z.string().max(4096).nullable(),
   nullable: z.boolean().optional(),
+  identityGeneration: z.enum(['always', 'byDefault']).nullable().optional(),
 });
 
 export type AlterFieldOperation = z.infer<typeof alterFieldOperationSchema>;
@@ -192,6 +202,7 @@ export const schemaFieldDraftRequestSchema = z.object({
     typeDetails: z.string().max(256),
     defaultValue: z.string().max(4096),
     nullable: z.boolean().optional(),
+    identityGeneration: z.enum(['none', 'always', 'byDefault']).optional(),
   }),
 });
 

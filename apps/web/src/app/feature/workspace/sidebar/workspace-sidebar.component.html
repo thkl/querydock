@@ -1,11 +1,10 @@
 <aside class="sidebar">
   <div class="sidebar-actions">
-    <a class="sidebar-action" routerLink="/tables/customers/data" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: false }">
+    <a class="sidebar-action" routerLink="/" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }">
       <span class="nav-icon">▦</span><span>Workspace</span>
     </a>
     <a class="sidebar-action" routerLink="/runbook" routerLinkActive="active">
-      <span class="nav-icon">▤</span><span>Runbooks</span>
-      @if (drafts.pendingCellEdits().length) { <span class="nav-count">{{ drafts.pendingCellEdits().length }}</span> }
+      <span class="nav-icon">▤</span><span>Runbook</span>
     </a>
   </div>
   <div class="sidebar-section-heading">
@@ -32,15 +31,16 @@
       @for (group of connections.resourceGroups(); track group.schema) {
         <div class="tree-row schema-row" [title]="group.schema"><span class="tree-caret">⌄</span><span class="schema-icon">▱</span><span>{{ group.schema }}</span></div>
         @for (resource of group.resources; track resource.schema + '.' + resource.name) {
-          <a
+          <button
             class="tree-row table-row"
-            [routerLink]="['/tables', resource.name, 'schema']"
-            [queryParams]="{ schema: resource.schema }"
-            routerLinkActive="selected"
+            [class.selected]="pages.isActiveTable(connections.activeConnectionId() ?? '', resource.schema, resource.name)"
+            type="button"
             [title]="resource.schema + '.' + resource.name"
+            [attr.aria-current]="pages.isActiveTable(connections.activeConnectionId() ?? '', resource.schema, resource.name) ? 'page' : null"
+            (click)="openResourceSchema(resource.schema, resource.name)"
           >
-            <span class="table-icon">▦</span><span>{{ resource.name }}</span>
-          </a>
+            <span class="table-icon" aria-hidden="true">▦</span><span>{{ resource.name }}</span>
+          </button>
         }
       }
       @if (!connections.activeResources().length && !connections.resourceErrorsByConnection().get(connections.activeConnectionId() ?? '')) {
@@ -51,7 +51,6 @@
     }
   </div>
   <div class="sidebar-bottom">
-    <div class="demo-note"><span class="demo-note-dot"></span>Grid rows are sample data</div>
     <div class="sidebar-footer"><span class="kbd">⌘ K</span><span>Quick actions</span></div>
   </div>
 </aside>

@@ -396,9 +396,12 @@ function operationMatchesField(
     && field.numericScale === (operation.numericScale ?? null);
   const defaultExpression = operation.defaultExpression?.trim() ?? null;
   const nullableMatches = operation.kind === 'addNullableField'
-    ? field.nullable
+    ? operation.identityGeneration ? !field.nullable : field.nullable
     : operation.nullable === undefined || field.nullable === operation.nullable;
-  return typeMatches && (field.defaultExpression?.trim() ?? null) === defaultExpression && nullableMatches;
+  const identityMatches = operation.identityGeneration === undefined
+    || field.identityGeneration === operation.identityGeneration;
+  return typeMatches && (field.defaultExpression?.trim() ?? null) === defaultExpression
+    && nullableMatches && identityMatches;
 }
 
 function operationMatchesSnapshot(snapshot: TableSnapshot, operation: SchemaOperation): boolean {

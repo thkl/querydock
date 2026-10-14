@@ -6,7 +6,9 @@ import { AGRID_RENDERER_CONTEXT } from '@thkl/agrid';
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    @if (label()) {
+    @if (notApplicable()) {
+      <span class="schema-grid-na">Not applicable</span>
+    } @else if (label()) {
       <span class="schema-grid-badge" [class.schema-grid-badge--draft]="draft()"
         [class.schema-grid-badge--required]="required()"
         [class.schema-grid-badge--error]="invalid()">{{ label() }}</span>
@@ -16,6 +18,7 @@ import { AGRID_RENDERER_CONTEXT } from '@thkl/agrid';
   `,
   styles: [`
     :host { display: inline-flex; align-items: center; min-width: 0; }
+    .schema-grid-na { color: var(--color-muted); font-size: .86em; }
     .schema-grid-badge {
       display: inline-flex;
       align-items: center;
@@ -47,6 +50,10 @@ import { AGRID_RENDERER_CONTEXT } from '@thkl/agrid';
 })
 export class SchemaBadgeCellComponent {
   private readonly context = inject(AGRID_RENDERER_CONTEXT);
+  readonly notApplicable = computed(() =>
+    this.context.column().field === 'identityGeneration'
+      && this.context.row()['canEditIdentity'] === false,
+  );
   readonly label = computed(() => {
     const value = this.context.value();
     if (value === true) return 'UNCOMMITTED';

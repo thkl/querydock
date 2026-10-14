@@ -23,18 +23,21 @@ import {
 } from '@thkl/agrid';
 import { ConnectionApiService } from '../connections/connection-api.service';
 import { RunbookService } from '../runbook/runbook.service';
+import { WorkspacePagesService } from '../workspace-pages.service';
 import { SchemaBadgeCellComponent } from './schema-badge-cell.component';
 
 interface SchemaFieldRow {
   sourceName: string | null;
   operationName: string | null;
   canEdit: boolean;
+  canEditIdentity: boolean;
   name: string;
   dataType: string;
   typeDetails: string;
   typeIdentity: string;
   nullable: boolean;
   defaultValue: string;
+  identityGeneration: 'none' | 'always' | 'byDefault';
   isUncommitted: boolean;
   isGridInput: boolean;
   editedFields: string[];
@@ -70,6 +73,7 @@ export class TableSchemaComponent {
 
   readonly connections = inject(ConnectionApiService);
   readonly runbook = inject(RunbookService);
+  private readonly workspacePages = inject(WorkspacePagesService);
   readonly routeState = toSignal(
     combineLatest([this.route.paramMap, this.route.queryParamMap]),
     { initialValue: [this.route.snapshot.paramMap, this.route.snapshot.queryParamMap] as const },
@@ -82,6 +86,7 @@ export class TableSchemaComponent {
       sourceName: field.name,
       operationName: null,
       canEdit: field.editable,
+      canEditIdentity: field.identityEditable,
       name: field.name,
       dataType: field.editableType ?? field.dataType,
       typeDetails: field.characterMaximumLength !== null
@@ -91,11 +96,10 @@ export class TableSchemaComponent {
           : '',
       typeIdentity: `${field.typeSchema}.${field.typeName}`,
       nullable: field.nullable,
-      defaultValue: field.identityGeneration
-        ? `IDENTITY ${field.identityGeneration === 'always' ? 'ALWAYS' : 'BY DEFAULT'}`
-        : field.generated
+      defaultValue: field.generated
           ? `GENERATED${field.generationExpression ? ` · ${field.generationExpression}` : ''}`
           : field.defaultExpression ?? '—',
+      identityGeneration: field.identityGeneration ?? 'none',
       isUncommitted: false,
       isGridInput: false,
       editedFields: [],
@@ -114,13 +118,15 @@ export class TableSchemaComponent {
         fields.push({
           sourceName: null,
           operationName: operation.name,
-          canEdit: true,
+          canEdit: !operation.identityGeneration,
+          canEditIdentity: this.identityGenerationAllowed(operation.type),
           name: operation.name,
           dataType: operation.type,
           typeDetails: fieldTypeDetails(operation),
           typeIdentity: this.typeIdentity(table, operation.type),
-          nullable: true,
+          nullable: operation.identityGeneration ? false : true,
           defaultValue: operation.defaultExpression ?? '—',
+          identityGeneration: operation.identityGeneration ?? 'none',
           isUncommitted: true,
           isGridInput: false,
           editedFields: [],
@@ -130,12 +136,16 @@ export class TableSchemaComponent {
         const field = fields.find(({ sourceName }) => sourceName === operation.name);
         if (!field) continue;
         field.operationName = operation.name;
-        field.canEdit = true;
+        if (operation.identityGeneration !== undefined) field.canEdit = operation.identityGeneration === null;
+        field.canEditIdentity = this.identityGenerationAllowed(operation.type);
         field.name = operation.newName;
         field.dataType = operation.type;
         field.typeDetails = fieldTypeDetails(operation);
         field.typeIdentity = this.typeIdentity(table, operation.type);
         field.defaultValue = operation.defaultExpression ?? '—';
+        field.identityGeneration = operation.identityGeneration === undefined
+          ? field.identityGeneration
+          : operation.identityGeneration ?? 'none';
         field.nullable = operation.nullable ?? field.nullable;
         field.isUncommitted = true;
         field.status = 'UNCOMMITTED';
@@ -179,6 +189,8 @@ export class TableSchemaComponent {
       control: new AgridControl(),
       readonly: false,
       allowAddRows: true,
+      enableRowMarking: false,
+      enableColumnMarking: false,
       showToolbar: false,
       hideGridStatusBar: true,
       removeEmptyNewRowOnEscape:true,
@@ -194,6 +206,8 @@ export class TableSchemaComponent {
       control: new AgridControl(),
       readonly: true,
       allowAddRows: false,
+      enableRowMarking: false,
+      enableColumnMarking: false,
       showToolbar: false,
       hideGridStatusBar: true,
       removeEmptyNewRowOnEscape:true,
@@ -211,6 +225,8 @@ export class TableSchemaComponent {
       readonly: false,
       allowAddRows: true,
       showToolbar: false,
+      enableRowMarking: false,
+      enableColumnMarking: false,
       hideGridStatusBar: true,
       removeEmptyNewRowOnEscape:true,
       clearCellSelectionOnBackgroundClick: true,
@@ -223,6 +239,8 @@ export class TableSchemaComponent {
       control: new AgridControl(),
       readonly: true,
       showToolbar: false,
+      enableRowMarking: false,
+      enableColumnMarking: false,
       hideGridStatusBar: true,
       removeEmptyNewRowOnEscape:true,
       clearCellSelectionOnBackgroundClick: true,
@@ -230,7 +248,11 @@ export class TableSchemaComponent {
       getRowClass: ({ row }) => row.isUncommitted ? 'schema-row-uncommitted' : '',
     });
     effect(() => this.fieldDatasource.setData(this.displayFields()));
-    effect(() => this.editableFieldGridProvider.columns.set(this.makeFieldColumns()));
+    effect(() => {
+      const columns = this.makeFieldColumns();
+      this.editableFieldGridProvider.columns.set(columns);
+      this.readonlyFieldGridProvider.columns.set(columns);
+    });
     effect(() => this.constraintDatasource.setData(this.displayConstraints()));
     effect(() => this.editableConstraintGridProvider.columns.set(this.makeConstraintColumns()));
     effect(() => {
@@ -247,6 +269,7 @@ export class TableSchemaComponent {
         return;
       }
 
+      this.workspacePages.registerOpenedTableSchema(connection.connectionId, schema, table);
       this.loading.set(true);
       void this.connections.inspectTable(connection.connectionId, schema, table)
         .then((snapshot) => {
@@ -264,16 +287,19 @@ export class TableSchemaComponent {
   }
 
   prepareFieldDraft(event: NewRecord<SchemaFieldRow>): void {
+    const dataType = this.snapshot()?.editableFieldTypes[0]?.value ?? '';
     event.datasource.updateRow(event.index, {
       ...event.data,
       sourceName: null,
       operationName: null,
       canEdit: true,
       name: '',
-      dataType: this.snapshot()?.editableFieldTypes[0]?.value ?? '',
+      dataType,
+      canEditIdentity: this.identityGenerationAllowed(dataType),
       typeDetails: '',
       nullable: true,
       defaultValue: '—',
+      identityGeneration: 'none',
       isUncommitted: false,
       isGridInput: true,
       editedFields: [],
@@ -303,14 +329,20 @@ export class TableSchemaComponent {
   }
 
   onFieldCellEdit(event: GridEditEvent<SchemaFieldRow>): void {
-    if (!['name', 'dataType', 'typeDetails', 'defaultValue', 'nullable'].includes(event.field)) return;
+    if (!['name', 'dataType', 'typeDetails', 'defaultValue', 'nullable', 'identityGeneration'].includes(event.field)) return;
     const row = this.fieldDatasource.rows()[event.position.rowIndex];
-    if (!row || (!row.isGridInput && !row.isUncommitted && !row.canEdit)) return;
+    if (!row || (event.field === 'identityGeneration'
+      ? !row.canEditIdentity
+      : !row.isGridInput && !row.isUncommitted && !row.canEdit)) return;
     this.stageError.set(null);
     const editedFields = [...new Set([...row.editedFields, event.field])];
     this.fieldDatasource.patchRow(event.position.rowIndex, {
       editedFields,
-      status: editedFields.includes('name') && editedFields.includes('dataType')
+      canEditIdentity: event.field === 'dataType' && (row.isGridInput || row.canEdit)
+        ? this.identityGenerationAllowed(row.dataType)
+        : row.canEditIdentity,
+      status: editedFields.includes('identityGeneration')
+        || (editedFields.includes('name') && editedFields.includes('dataType'))
         ? 'READY TO STAGE'
         : 'FILL NAME + TYPE',
     });
@@ -323,7 +355,7 @@ export class TableSchemaComponent {
   }
 
   onConstraintCellEdit(event: GridEditEvent<SchemaConstraintRow>): void {
-    if (!['kind', 'name', 'fields', 'drop'].includes(event.field)) return;
+    if (!['kind', 'name', 'fields'].includes(event.field)) return;
     const row = this.constraintDatasource.rows()[event.position.rowIndex];
     if (!row) return;
     this.stageError.set(null);
@@ -343,6 +375,36 @@ export class TableSchemaComponent {
     if (row.isUncommitted || row.drop !== this.isConstraintDropped(row.sourceName)) {
       void this.stageConstraint(row);
     }
+  }
+
+  onConstraintRowRemoved(event: RecordEditEvent<SchemaConstraintRow>): void {
+    const row = event.data;
+    if (row.isGridInput) return;
+
+    if (row.sourceName !== null && !row.canDrop) {
+      this.stageError.set('This constraint cannot be removed with the current database adapter.');
+      this.constraintDatasource.setData(this.displayConstraints());
+      return;
+    }
+
+    const connection = this.connections.activeConnection();
+    const snapshot = this.snapshot();
+    if (!connection || !snapshot?.canAlter) {
+      this.constraintDatasource.setData(this.displayConstraints());
+      return;
+    }
+
+    this.stageError.set(null);
+    const remove = row.sourceName !== null
+      ? this.stageConstraint({ ...row, drop: !row.drop })
+      : row.isUncommitted
+        ? this.runbook.stageSchemaOperation(connection, snapshot, null, row.operationName ?? row.name)
+        : Promise.resolve();
+    void remove
+      .catch((error: unknown) => {
+        this.stageError.set(error instanceof Error ? error.message : 'Unable to remove this constraint.');
+      })
+      .finally(() => this.constraintDatasource.setData(this.displayConstraints()));
   }
 
   private async stageConstraint(row: SchemaConstraintRow): Promise<void> {
@@ -425,6 +487,7 @@ export class TableSchemaComponent {
         typeDetails: row.typeDetails,
         defaultValue: row.defaultValue,
         nullable: row.nullable,
+        identityGeneration: row.identityGeneration,
       };
       await this.runbook.stageSchemaFieldDraft(connection, snapshot, draft, row.operationName ?? row.sourceName ?? row.name);
     } catch (error) {
@@ -452,7 +515,13 @@ export class TableSchemaComponent {
         field: 'nullable', header: 'Nullable', width: 105, type: 'boolean', editable: true,
         cellReadonly: (params: CellReadonlyParams<SchemaFieldRow>) => params.row.sourceName === null || !params.row.canEdit,
       },
-      { field: 'defaultValue', header: 'Default / generation', width: 260, editable: true,
+      {
+        field: 'identityGeneration', header: 'Identity', width: 190, editable: true,
+        values: this.snapshot()?.editableIdentityGenerations ?? [],
+        cellReadonly: ({ row }: CellReadonlyParams<SchemaFieldRow>) => !row.canEditIdentity,
+        cellRendererComponent: SchemaBadgeCellComponent,
+      },
+      { field: 'defaultValue', header: 'Default', width: 260, editable: true,
         cellReadonly: (params: CellReadonlyParams<SchemaFieldRow>) => !params.row.isGridInput && !params.row.canEdit },
       { field: 'status', header: 'Status', width: 190, cellRendererComponent: SchemaBadgeCellComponent, editable: false, locked: true },
     ];
@@ -470,10 +539,6 @@ export class TableSchemaComponent {
       { field: 'fields', header: 'Fields / CHECK expression', width: 290, editable: true, cellReadonly: ({ row }: CellReadonlyParams<SchemaConstraintRow>) => row.sourceName !== null },
       { field: 'definition', header: 'Definition', width: 300, editable: false, locked: true },
       { field: 'references', header: 'References', width: 200, editable: false, locked: true },
-      {
-        field: 'drop', header: 'Remove', width: 90, type: 'boolean', editable: true,
-        cellReadonly: ({ row }: CellReadonlyParams<SchemaConstraintRow>) => row.isGridInput || !row.canDrop,
-      },
       { field: 'status', header: 'Status', width: 150, cellRendererComponent: SchemaBadgeCellComponent, editable: false, locked: true },
     ];
   }
@@ -481,6 +546,10 @@ export class TableSchemaComponent {
   private typeIdentity(snapshot: TableSnapshot, type: string): string {
     const descriptor = snapshot.editableFieldTypes.find((item) => item.value === type);
     return descriptor ? `${descriptor.typeSchema}.${descriptor.typeName}` : type;
+  }
+
+  private identityGenerationAllowed(type: string): boolean {
+    return this.snapshot()?.editableFieldTypes.find((item) => item.value === type)?.identityGenerationSupported ?? false;
   }
 
   private toDisplayConstraints(): SchemaConstraintRow[] {

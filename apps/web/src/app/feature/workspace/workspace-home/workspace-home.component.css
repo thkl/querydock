@@ -1,0 +1,75 @@
+:host {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+}
+
+.workspace-empty {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  place-items: center;
+  padding: 32px;
+}
+
+.empty-card {
+  display: grid;
+  justify-items: center;
+  max-width: 440px;
+  padding: clamp(24px, 5vw, 44px);
+  border: 1px solid var(--color-border);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--color-surface) 88%, transparent);
+  box-shadow: var(--shadow-card);
+  text-align: center;
+}
+
+.empty-icon {
+  display: grid;
+  width: 52px;
+  height: 52px;
+  place-items: center;
+  margin-bottom: 18px;
+  border: 1px solid var(--color-border);
+  border-radius: 15px;
+  background: var(--color-chip);
+  color: var(--color-accent);
+  font-size: 1.5em;
+}
+
+.eyebrow {
+  margin: 0 0 8px;
+  color: var(--color-accent-strong);
+  font-size: .78em;
+  font-weight: 700;
+  letter-spacing: .12em;
+}
+
+h1 {
+  margin: 0;
+  color: var(--color-foreground);
+  font-size: clamp(1.35em, 3vw, 1.8em);
+}
+
+.empty-card p:not(.eyebrow) {
+  margin: 10px 0 0;
+  color: var(--color-muted);
+  line-height: 1.55;
+}
+
+.connect-button {
+  min-height: 40px;
+  margin-top: 20px;
+  padding: 0 16px;
+  border: 1px solid var(--color-accent);
+  border-radius: 8px;
+  background: var(--color-accent);
+  color: var(--color-surface);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 650;
+}
+
+.connect-button:hover { filter: brightness(1.06); }
+.connect-button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }

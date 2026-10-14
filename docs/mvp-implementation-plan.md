@@ -1,6 +1,6 @@
 # QueryDock — MVP Implementation Plan
 
-Status: in progress. Milestone B connection and inspection are implemented. The user-confirmed Milestone C flow connects, inspects a table, stages a field change, previews and applies it, verifies it in the database, and exports SQL. Milestone D is underway: existing supported fields can stage edits to name, type/parameters, default, and nullability; the constraint grid stages primary-key, unique, and CHECK additions, plus supported removals. Identity-column changes, other constraint kinds, table lifecycle operations, and data browsing remain open work.
+Status: in progress. Milestone B connection and inspection are implemented. The user-confirmed Milestone C flow connects, inspects a table, stages a field change, previews and applies it, verifies it in the database, and exports SQL. Milestone D is underway: existing supported fields can stage edits to name, type/parameters, default, nullability, and identity generation; the constraint grid stages primary-key, unique, and CHECK additions, plus supported removals. Foreign-key constraints, other constraint kinds, table lifecycle operations, and data browsing remain open work.
 Date: 2026-10-13.
 
 References:
@@ -129,8 +129,9 @@ The initial Apply contract uses deterministic server-side revalidation rather th
 ### Current implementation slice
 
 - Existing editable fields stage name, type/parameters, default, and nullability changes through adapter-generated previews.
+- The identity control is populated from adapter capabilities and supports adding, changing, or removing `GENERATED ALWAYS` / `BY DEFAULT` on smallint, integer, and bigint fields. Identity changes include nullability/default checks and explicit warnings for populated tables.
 - The constraint grid can add and remove primary-key, unique, and CHECK constraints. The PostgreSQL adapter supplies the capability list, validates field and expression references, generates SQL, and warns about integrity changes. Foreign-key and exclusion constraints remain read only.
-- PostgreSQL identity-column edits, table create/rename/drop, complete constraint coverage, dependency ordering across tables, and the selected-operation integration matrix remain to be implemented.
+- Table create/rename/drop, foreign-key constraints, dependency ordering across tables, and the selected-operation integration matrix remain to be implemented.
 
 ## 7. Milestone E — Data browsing and batch editing
 
