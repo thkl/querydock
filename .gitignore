@@ -9,3 +9,5 @@ playwright-report/
 test-results/
 .agents
 graphify-out/
+.impeccable
+.vscode
