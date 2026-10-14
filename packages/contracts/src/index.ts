@@ -216,8 +216,19 @@ export const createTableOperationSchema = z.object({
 
 export type CreateTableOperation = z.infer<typeof createTableOperationSchema>;
 
+export const renameTableOperationSchema = z.object({
+  kind: z.literal('renameTable'),
+  newName: z.string().max(1024),
+});
+
+export const dropTableOperationSchema = z.object({
+  kind: z.literal('dropTable'),
+});
+
 export const schemaOperationSchema = z.discriminatedUnion('kind', [
   createTableOperationSchema,
+  renameTableOperationSchema,
+  dropTableOperationSchema,
   addNullableFieldOperationSchema,
   alterFieldOperationSchema,
   addConstraintOperationSchema,
@@ -276,7 +287,7 @@ export type MigrationApplyRequest = z.infer<typeof migrationApplyRequestSchema>;
 
 export const migrationApplyResponseSchema = z.object({
   appliedStatements: z.array(z.string()),
-  snapshots: z.array(tableSnapshotSchema).min(1),
+  snapshots: z.array(tableSnapshotSchema),
 });
 
 export type MigrationApplyResponse = z.infer<typeof migrationApplyResponseSchema>;

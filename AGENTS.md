@@ -13,7 +13,7 @@ Treat architecture decisions as authoritative when plans differ. Contract names 
 
 ## Build, Test, and Development Commands
 
-Run `pnpm install` to install dependencies. `pnpm dev` starts Angular and NestJS; the web server proxies `/api` to port 3000. `pnpm build` builds workspace packages; `pnpm typecheck` checks TypeScript. Docker packaging is not configured yet. Planned tests use Vitest, disposable PostgreSQL databases, and Playwright.
+Run `pnpm install` to install dependencies. `pnpm start:dev` starts Angular and NestJS; the web server proxies `/api` to port 3000. `pnpm build` builds workspace packages; `pnpm typecheck` checks application TypeScript. Run `pnpm --filter @querydock/web test` or `pnpm --filter @querydock/server test` for package-local Vitest suites; `pnpm test` type-checks all specs and runs those suites plus contract tests. Set `QUERYDOCK_TEST_DATABASE_URL` to a dedicated database with `test` in its name, then run `pnpm test:integration` for PostgreSQL migration integration coverage. Docker packaging and Playwright tests are not configured yet.
 
 ## Coding Style & Naming Conventions
 
@@ -21,7 +21,7 @@ Use TypeScript, external Angular templates, plain CSS, and semantic custom prope
 
 ## Testing Guidelines
 
-Place tests alongside their app or package. Cover adapter SQL and transactions with PostgreSQL integration tests, and critical workflows with browser tests. No coverage threshold or filename pattern is set yet.
+Place application specs under `apps/web/test/` or `apps/server/test/` with the `.spec.ts` suffix; shared contract specs belong under `tests/contracts/`. Keep unit suites database-free. Integration tests must use a disposable PostgreSQL database provided through `QUERYDOCK_TEST_DATABASE_URL`. No coverage threshold is set. Browser workflow tests remain planned.
 
 ## Commit & Pull Request Guidelines
 

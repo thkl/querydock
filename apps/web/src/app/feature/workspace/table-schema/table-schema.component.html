@@ -34,6 +34,29 @@
       }
     </header>
 
+    @if (table.canAlter) {
+      <section class="table-actions" aria-label="Table actions">
+        @if (pendingTableOperation(); as pendingTable) {
+          <span class="table-action-pending" role="status">
+            {{ pendingTable.kind === 'dropTable' ? 'Table drop staged' : 'Rename staged to ' + pendingTable.newName }} · see runbook
+          </span>
+          <button class="subtle-button" type="button" [disabled]="stagingField()" (click)="cancelTableOperation()">Cancel staged action</button>
+        }
+        @if (renamingTable()) {
+          <label class="table-rename-field">New table name
+            <input [value]="tableNameDraft()" (input)="tableNameDraft.set($any($event.target).value)"
+              (keydown.enter)="stageTableRename()" (keydown.escape)="renamingTable.set(false)" />
+          </label>
+          <button class="subtle-button" type="button" (click)="renamingTable.set(false)">Cancel</button>
+          <button class="subtle-button" type="button" [disabled]="stagingField() || !tableNameDraft().trim()"
+            (click)="stageTableRename()">Stage rename</button>
+        } @else {
+          <button class="subtle-button" type="button" [disabled]="stagingField()" (click)="beginTableRename()">Rename table</button>
+          <button class="table-drop-button" type="button" [disabled]="stagingField()" (click)="stageTableDrop()">Stage table drop</button>
+        }
+      </section>
+    }
+
     <section class="structure-card" aria-labelledby="fields-title">
       <header class="card-heading">
         <div>

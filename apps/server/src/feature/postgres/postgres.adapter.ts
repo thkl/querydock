@@ -248,12 +248,14 @@ export class PostgresAdapter {
       if (request.operations.some((operation) => operation.kind === 'createTable')) {
         throw new MigrationPlanError('invalid', 'Create-table operations require a new-table baseline.');
       }
+      validateTableLifecycleOperations(request.operations);
       const snapshot = await this.inspectTableWithClient(client, request.schema, request.table);
       if (!snapshot) throw new MigrationPlanError('not-found', 'The requested table was not found or is not visible.');
       if (snapshot.fingerprint !== request.baselineFingerprint) {
         throw new MigrationPlanError('drift', 'The table changed since it was loaded. Refresh the schema before drafting a migration.');
       }
       await validateForeignKeyTargets(client, snapshot, request.operations);
+      await validateTableLifecycleTarget(client, snapshot, request.operations);
       const preview = createMigrationPreview(snapshot, request);
       const warnings = collectMigrationWarnings(snapshot, request.operations);
       return { baselineFingerprint: snapshot.fingerprint, statements: preview, warnings };
@@ -320,6 +322,7 @@ export class PostgresAdapter {
           }
           return { appliedStatements: statements, snapshots: createdSnapshots };
         }
+        validateTableLifecycleOperations(request.operations);
         await client.query(`LOCK TABLE ${quoteIdentifier(request.schema)}.${quoteIdentifier(request.table)} IN ACCESS EXCLUSIVE MODE`);
         const snapshot = await this.inspectTableWithClient(client, request.schema, request.table);
         if (!snapshot) throw new MigrationPlanError('not-found', 'The requested table was not found or is not visible.');
@@ -328,6 +331,7 @@ export class PostgresAdapter {
         }
 
         await validateForeignKeyTargets(client, snapshot, request.operations);
+        await validateTableLifecycleTarget(client, snapshot, request.operations);
         const statements = createMigrationPreview(snapshot, request);
         if (!sameStatements(statements, request.reviewedStatements)) {
           throw new MigrationPlanError('review-mismatch', 'The reviewed SQL no longer matches this migration plan. Generate a new preview before applying.');
@@ -338,14 +342,20 @@ export class PostgresAdapter {
         }
 
         for (const statement of statements) await client.query(statement);
-        const updatedSnapshot = await this.inspectTableWithClient(client, request.schema, request.table);
-        if (!updatedSnapshot) throw new MigrationPlanError('unknown', 'The migration ran, but the resulting schema could not be confirmed.');
+        const lifecycle = request.operations[0];
+        const resultSchema = lifecycle?.kind === 'renameTable' ? lifecycle.newName : request.table;
+        const updatedSnapshot = lifecycle?.kind === 'dropTable'
+          ? null
+          : await this.inspectTableWithClient(client, request.schema, resultSchema);
+        if (lifecycle?.kind !== 'dropTable' && !updatedSnapshot) {
+          throw new MigrationPlanError('unknown', 'The migration ran, but the resulting schema could not be confirmed.');
+        }
         commitStarted = true;
         const commitResult = await client.query('COMMIT');
         if (commitResult.command !== 'COMMIT') {
           throw new MigrationPlanError('unknown', 'The server could not confirm that the migration transaction committed.');
         }
-        return { appliedStatements: statements, snapshots: [updatedSnapshot] };
+        return { appliedStatements: statements, snapshots: updatedSnapshot ? [updatedSnapshot] : [] };
       } catch (error) {
         let rollbackConfirmed = false;
         try {
@@ -598,7 +608,8 @@ function createTableWarnings(schema: string, operations: SchemaOperation[]): str
   return [`CREATE TABLE IF NOT EXISTS leaves existing objects unchanged and does not compare their structure with this draft: ${tableNames.map((table) => `"${schema}.${table}"`).join(', ')}.`];
 }
 
-function createTableStatement(schema: string, table: string, fields: CreateTableField[], ifNotExists = false): string {
+/** @internal Pure SQL generation helper; exported for the migration-plan unit tests. */
+export function createTableStatement(schema: string, table: string, fields: CreateTableField[], ifNotExists = false): string {
   validatePostgresIdentifier(schema, 'schema');
   validatePostgresIdentifier(table, 'table');
   if (!fields.length) throw new MigrationPlanError('invalid', 'Add at least one field to the table.');
@@ -865,11 +876,22 @@ function normalizeFieldDraft(
   };
 }
 
-function createMigrationPreview(snapshot: TableSnapshot, request: MigrationPreviewRequest): string[] {
+/** @internal Pure SQL generation helper; exported for the migration-plan unit tests. */
+export function createMigrationPreview(snapshot: TableSnapshot, request: MigrationPreviewRequest): string[] {
   if (snapshot.kind !== 'table' && snapshot.kind !== 'partitionedTable') {
-    throw new MigrationPlanError('invalid', 'Only PostgreSQL tables can receive a new nullable field.');
+    throw new MigrationPlanError('invalid', 'Only PostgreSQL tables can be renamed, dropped, or altered.');
   }
-
+  const lifecycle = request.operations[0];
+  if (lifecycle?.kind === 'renameTable') {
+    validatePostgresIdentifier(lifecycle.newName, 'table');
+    if (lifecycle.newName === snapshot.name) {
+      throw new MigrationPlanError('invalid', 'Choose a different name for the table.');
+    }
+    return [`ALTER TABLE ${quoteIdentifier(snapshot.schema)}.${quoteIdentifier(snapshot.name)} RENAME TO ${quoteIdentifier(lifecycle.newName)};`];
+  }
+  if (lifecycle?.kind === 'dropTable') {
+    return [`DROP TABLE ${quoteIdentifier(snapshot.schema)}.${quoteIdentifier(snapshot.name)};`];
+  }
   const table = `${quoteIdentifier(snapshot.schema)}.${quoteIdentifier(snapshot.name)}`;
   const currentNames = new Set(snapshot.fields.map(({ name }) => name));
   const fieldOperations = request.operations.filter((operation) =>
@@ -954,7 +976,7 @@ function createMigrationPreview(snapshot: TableSnapshot, request: MigrationPrevi
           seenFields.add(resolvedName);
         }
       }
-    } else {
+    } else if (operation.kind === 'dropConstraint') {
       validatePostgresIdentifier(operation.name, 'constraint');
       const previousConstraintOperation = constraintSources.get(operation.name);
       if (previousConstraintOperation === 'drop'
@@ -1077,10 +1099,12 @@ function sameFieldType(
   operation: Extract<SchemaOperation, { kind: 'alterField' }>,
 ): boolean {
   const existingType = normalizeFieldType(field.dataType);
-  return existingType === operation.type
-    && field.characterMaximumLength === operation.characterMaximumLength
-    && field.numericPrecision === operation.numericPrecision
-    && field.numericScale === operation.numericScale;
+  if (existingType !== operation.type) return false;
+  if (operation.type === 'varchar') return field.characterMaximumLength === operation.characterMaximumLength;
+  if (operation.type === 'numeric') {
+    return field.numericPrecision === operation.numericPrecision && field.numericScale === operation.numericScale;
+  }
+  return true;
 }
 
 function normalizeFieldType(dataType: string): string {
@@ -1136,9 +1160,13 @@ function formatFieldType(operation: Pick<Extract<SchemaOperation, { kind: 'addNu
   return sqlType;
 }
 
-function collectMigrationWarnings(snapshot: TableSnapshot, operations: SchemaOperation[]): string[] {
+/** @internal Pure warning generation helper; exported for the migration-plan unit tests. */
+export function collectMigrationWarnings(snapshot: TableSnapshot, operations: SchemaOperation[]): string[] {
   const warnings: string[] = [];
   for (const operation of operations) {
+    if (operation.kind === 'dropTable') {
+      warnings.push(`Dropping ${snapshot.schema}.${snapshot.name} permanently removes the table and its data. PostgreSQL will reject the drop if other objects depend on it.`);
+    }
     if (operation.kind === 'addNullableField' && operation.defaultExpression) {
       warnings.push(`Adding "${operation.name}" with a default may populate existing rows. Review the expression and resulting SQL.`);
     }
@@ -1175,6 +1203,34 @@ function collectMigrationWarnings(snapshot: TableSnapshot, operations: SchemaOpe
     }
   }
   return warnings;
+}
+
+function validateTableLifecycleOperations(operations: SchemaOperation[]): void {
+  const lifecycle = operations.filter((operation) => operation.kind === 'renameTable' || operation.kind === 'dropTable');
+  if (lifecycle.length && (lifecycle.length !== 1 || operations.length !== 1)) {
+    throw new MigrationPlanError('invalid', 'Rename or drop a table in its own runbook batch.');
+  }
+}
+
+async function validateTableLifecycleTarget(
+  client: Client,
+  snapshot: TableSnapshot,
+  operations: SchemaOperation[],
+): Promise<void> {
+  const operation = operations[0];
+  if (operation?.kind !== 'renameTable') return;
+  validatePostgresIdentifier(operation.newName, 'table');
+  if (operation.newName === snapshot.name) throw new MigrationPlanError('invalid', 'Choose a different name for the table.');
+  const existing = await client.query<{ exists: boolean }>(`
+    SELECT EXISTS (
+      SELECT 1 FROM pg_catalog.pg_class relation
+      JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace
+      WHERE namespace.nspname = $1 AND relation.relname = $2
+    ) AS exists
+  `, [snapshot.schema, operation.newName]);
+  if (existing.rows[0]?.exists) {
+    throw new MigrationPlanError('invalid', `A table or relation named "${operation.newName}" already exists in schema "${snapshot.schema}".`);
+  }
 }
 
 function validateFieldName(name: string): void {

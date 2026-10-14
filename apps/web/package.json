@@ -6,7 +6,9 @@
     "start:dev": "ng serve",
     "start:debug": "ng serve",
     "build": "ng build",
-    "typecheck": "tsc -p tsconfig.app.json --noEmit"
+    "typecheck": "tsc -p tsconfig.app.json --noEmit",
+    "test": "pnpm -w exec vitest run --config apps/web/vitest.config.mts",
+    "test:watch": "pnpm -w exec vitest --config apps/web/vitest.config.mts"
   },
   "dependencies": {
     "@angular/cdk": "^22.2.2",

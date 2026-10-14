@@ -1,8 +1,10 @@
 import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { SqlEditorComponent } from '../sql-editor/sql-editor.component';
-import { RunbookService } from './runbook.service';
+import { RunbookService, type SchemaRunbook } from './runbook.service';
 import { ConfirmationDialogService } from '../confirmation/confirmation-dialog.service';
+import { WorkspacePagesService } from '../workspace-pages.service';
+import { ConnectionApiService } from '../connections/connection-api.service';
 
 @Component({
   selector: 'qd-runbook',
@@ -15,6 +17,8 @@ import { ConfirmationDialogService } from '../confirmation/confirmation-dialog.s
 export class RunbookComponent {
   readonly runbook = inject(RunbookService);
   private readonly confirmation = inject(ConfirmationDialogService);
+  private readonly workspacePages = inject(WorkspacePagesService);
+  private readonly connections = inject(ConnectionApiService);
 
   async apply(): Promise<void> {
     const warnings = this.runbook.runbook()?.preview?.warnings ?? [];
@@ -29,7 +33,23 @@ export class RunbookComponent {
       if (!confirmed) return;
       acknowledgedWarnings = warnings;
     }
-    void this.runbook.applyPending(acknowledgedWarnings).catch(() => undefined);
+    const state = this.runbook.runbook();
+    const tableOperation = state?.operations[0];
+    try {
+      await this.runbook.applyPending(acknowledgedWarnings);
+      if (!state) return;
+      const connectionId = this.connectionIdFor(state);
+      if (tableOperation?.kind === 'renameTable') {
+        const page = connectionId
+          ? this.workspacePages.renameTablePage(connectionId, state.schema, state.table, tableOperation.newName)
+          : null;
+        if (page) this.workspacePages.selectPage(page);
+      } else if (tableOperation?.kind === 'dropTable' && connectionId) {
+        this.workspacePages.closeTablePage(connectionId, state.schema, state.table);
+      }
+    } catch {
+      // The runbook service exposes the detailed failure message in the workspace.
+    }
   }
 
   discard(): void {
@@ -51,7 +71,21 @@ export class RunbookComponent {
       intent: 'warning',
     });
     if (!confirmed) return;
-    void this.runbook.resolveUnknownApply(outcome).catch((error: unknown) => this.runbook.reportError(error));
+    const state = this.runbook.runbook();
+    const tableOperation = state?.operations[0];
+    try {
+      await this.runbook.resolveUnknownApply(outcome);
+      if (outcome !== 'applied' || !state) return;
+      const connectionId = this.connectionIdFor(state);
+      if (tableOperation?.kind === 'renameTable' && connectionId) {
+        const page = this.workspacePages.renameTablePage(connectionId, state.schema, state.table, tableOperation.newName);
+        if (page) this.workspacePages.selectPage(page);
+      } else if (tableOperation?.kind === 'dropTable' && connectionId) {
+        this.workspacePages.closeTablePage(connectionId, state.schema, state.table);
+      }
+    } catch (error) {
+      this.runbook.reportError(error);
+    }
   }
 
   async clearRunbook(): Promise<void> {
@@ -63,5 +97,11 @@ export class RunbookComponent {
     });
     if (!confirmed) return;
     void this.runbook.clearRunbook();
+  }
+
+  private connectionIdFor(state: SchemaRunbook): string | null {
+    return this.connections.connections().find(({ target }) => target.adapter === state.target.adapter
+      && target.host === state.target.host && target.port === state.target.port
+      && target.database === state.target.database && target.username === state.target.username)?.connectionId ?? null;
   }
 }

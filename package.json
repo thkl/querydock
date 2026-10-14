@@ -12,9 +12,14 @@
     "start:debug": "pnpm --parallel --filter @querydock/server --filter @querydock/web start:debug",
     "build": "pnpm -r --if-present build",
     "typecheck": "pnpm -r --if-present typecheck",
-    "check": "pnpm typecheck && pnpm build"
+    "check": "pnpm typecheck && pnpm build",
+    "test": "pnpm test:typecheck && vitest run",
+    "test:typecheck": "pnpm --filter @querydock/server exec tsc -p ../../tests/tsconfig.json",
+    "test:watch": "vitest",
+    "test:integration": "pnpm --filter @querydock/server test:integration"
   },
   "devDependencies": {
-    "husky": "^9.1.7"
+    "husky": "^9.1.7",
+    "vitest": "^5.0.4"
   }
 }

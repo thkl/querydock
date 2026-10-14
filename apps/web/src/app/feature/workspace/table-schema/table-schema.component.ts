@@ -157,9 +157,18 @@ export class TableSchemaComponent {
     }
     return fields;
   });
+  readonly pendingTableOperation = computed(() => {
+    const pending = this.runbook.runbook();
+    const table = this.snapshot();
+    const connection = this.connections.activeConnection();
+    if (!pending || !table || !connection || !sameTarget(pending.target, connection.target)
+      || pending.schema !== table.schema || pending.table !== table.name) return null;
+    return pending.operations.find((operation) => operation.kind === 'renameTable' || operation.kind === 'dropTable') ?? null;
+  });
   readonly uncommittedSchemaChangeCount = computed(() =>
     this.displayFields().filter((field) => field.isUncommitted).length
-      + this.displayConstraints().filter((constraint) => constraint.isUncommitted).length,
+      + this.displayConstraints().filter((constraint) => constraint.isUncommitted).length
+      + (this.pendingTableOperation() ? 1 : 0),
   );
   readonly displayConstraints = computed<SchemaConstraintRow[]>(() =>
     this.toDisplayConstraints(),
@@ -182,6 +191,8 @@ export class TableSchemaComponent {
   readonly error = signal<string | null>(null);
   readonly stagingField = signal(false);
   readonly stageError = signal<string | null>(null);
+  readonly renamingTable = signal(false);
+  readonly tableNameDraft = signal('');
   readonly fieldTypeOptions = computed(() => (this.snapshot()?.editableFieldTypes ?? [])
     .map(({ value, label }) => ({ value, label })));
   readonly foreignKeyTargets = computed(() => this.connections.activeResources()
@@ -330,6 +341,55 @@ export class TableSchemaComponent {
       status: 'FILL NAME + TYPE',
     });
     this.stageError.set(null);
+  }
+
+  beginTableRename(): void {
+    const table = this.snapshot();
+    if (!table?.canAlter) return;
+    this.tableNameDraft.set(table.name);
+    this.renamingTable.set(true);
+    this.stageError.set(null);
+  }
+
+  async stageTableRename(): Promise<void> {
+    const table = this.snapshot();
+    const connection = this.connections.activeConnection();
+    const newName = this.tableNameDraft().trim();
+    if (!table || !connection || !newName) return;
+    this.stagingField.set(true);
+    this.stageError.set(null);
+    try {
+      await this.runbook.stageTableOperation(connection, table, { kind: 'renameTable', newName });
+      this.renamingTable.set(false);
+    } catch (error) {
+      this.stageError.set(error instanceof Error ? error.message : 'Unable to stage this table rename.');
+    } finally {
+      this.stagingField.set(false);
+    }
+  }
+
+  async stageTableDrop(): Promise<void> {
+    const table = this.snapshot();
+    const connection = this.connections.activeConnection();
+    if (!table?.canAlter || !connection) return;
+    this.stagingField.set(true);
+    this.stageError.set(null);
+    try {
+      await this.runbook.stageTableOperation(connection, table, { kind: 'dropTable' });
+    } catch (error) {
+      this.stageError.set(error instanceof Error ? error.message : 'Unable to stage this table drop.');
+    } finally {
+      this.stagingField.set(false);
+    }
+  }
+
+  async cancelTableOperation(): Promise<void> {
+    try {
+      await this.runbook.discardPending();
+      this.stageError.set(null);
+    } catch (error) {
+      this.stageError.set(error instanceof Error ? error.message : 'Unable to cancel this table action.');
+    }
   }
 
   prepareConstraintDraft(event: NewRecord<SchemaConstraintRow>): void {

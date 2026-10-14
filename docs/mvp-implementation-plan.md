@@ -1,12 +1,13 @@
 # QueryDock — MVP Implementation Plan
 
-Status: in progress. Milestone B connection and inspection are implemented. The user-confirmed Milestone C flow connects, inspects a table, stages a field change, previews and applies it, verifies it in the database, and exports SQL. Milestone D is underway: existing supported fields can stage edits to name, type/parameters, default, nullability, and identity generation; the constraint grid stages primary-key, unique, and CHECK additions, plus supported removals. Foreign-key constraints, other constraint kinds, table lifecycle operations, and data browsing remain open work.
+Status: in progress. Milestone B connection and inspection are implemented. The user-confirmed Milestone C flow connects, inspects a table, stages a field change, previews and applies it, verifies it in the database, and exports SQL. Milestone D is underway: supported existing fields, table create/rename/drop, and primary-key, unique, foreign-key, and CHECK constraints are available through adapter-generated runbooks. The selected-operation integration matrix and manual acceptance walkthrough remain before Milestone D sign-off; data browsing is planned for Milestone E.
 Date: 2026-10-13.
 
 References:
 
 - [Architecture decisions](architecture-decisions.md)
 - [Shared contracts proposal](contracts-plan.md)
+- [Milestone D completion checklist](milestone-d-completion-checklist.md)
 
 The architecture decisions are authoritative. Contract names/routes are proposals until implemented and verified. This plan does not authorize deployment or production database changes.
 
@@ -23,7 +24,7 @@ The first usable milestone is the complete flow: **connect → inspect table →
 - `apps/server`: NestJS, expiring credential sessions, PostgreSQL adapter using `pg`.
 - `packages/contracts`: shared Zod schemas and inferred types.
 - aGrid (`@thkl/agrid`) is the recommended grid candidate, pending an integration check.
-- Vitest for client/server, real PostgreSQL integration tests, Playwright for critical browser flows.
+- Vitest for contracts and server migration planning, opt-in real PostgreSQL integration tests, and Playwright planned for critical browser flows.
 - One production Docker image; NestJS serves frontend assets and API. Separate hot-reload processes during development.
 
 Select supported compatible framework/runtime versions at implementation time and commit a lockfile. Avoid extra runtime dependencies unless their benefit justifies ongoing maintenance.
@@ -120,7 +121,6 @@ The initial Apply contract uses deterministic server-side revalidation rather th
 
 - Field/constraint controls derive from descriptors and capabilities.
 - Renames update draft references without losing identity.
-- Multi-table operations are dependency ordered.
 - Invalid types/options/constraint relationships produce actionable issues before Apply.
 - Backfill or conversion requirements are explicit; no silent data-loss assumptions.
 - Pending consolidation preserves intentional intermediate schema/data states.
@@ -132,13 +132,14 @@ The initial Apply contract uses deterministic server-side revalidation rather th
 - New tables can be staged with adapter-provided field types, type parameters, nullability, defaults, and supported identity options. Preview and Apply confirm the schema and table name are available; Apply serializes concurrent QueryDock creates with a transaction-scoped advisory lock.
 - The identity control is populated from adapter capabilities and supports adding, changing, or removing `GENERATED ALWAYS` / `BY DEFAULT` on smallint, integer, and bigint fields. Identity changes include nullability/default checks and explicit warnings for populated tables.
 - The constraint grid can add and remove primary-key, unique, foreign-key, and CHECK constraints. Foreign-key previews validate the target table, fields, and primary/unique key; Apply repeats those checks, generates SQL on the server, and reports existing-row validation risk. Exclusion constraints remain read only.
-- Table rename/drop, dependency ordering across tables, and the selected-operation integration matrix remain to be implemented. Standalone index editing remains a scope decision.
+- Table rename and drop are adapter-generated, fingerprint-checked runbook operations with destructive warning acknowledgement and tab updates after Apply. Cross-table dependency ordering is deferred to Milestone E; the selected-operation integration matrix remains a Milestone D validation task. Standalone index editing remains a scope decision.
 
 ## 7. Milestone E — Relationship diagram, data browsing, and batch editing
 
 ### Deliverables
 
 - Database relationship diagram showing tables and their foreign-key relationships. Users can create, edit, and remove relationships from the diagram; edits remain adapter-validated runbook operations.
+- Dependency ordering for cross-table schema operations, including actionable reporting for blockers and cycles.
 - Bounded browsing, server-side filtering/sorting/paging, and refresh.
 - Insert/update/delete drafts with Save and Discard.
 - Safe key-based row identification and concurrency checks.

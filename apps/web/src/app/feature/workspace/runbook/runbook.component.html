@@ -21,7 +21,9 @@
       <span>Target</span>
       <strong>{{ state.target.database }}</strong>
       <code>{{ state.target.host }}:{{ state.target.port }} · {{ state.schema }}</code>
-      @if (state.baseline) {
+      @if (state.lastAppliedTableAction === 'dropped') {
+        <span class="runbook-completion">{{ state.schema }}.{{ state.table }} · table dropped</span>
+      } @else if (state.baseline) {
         <code>{{ state.schema }}.{{ state.table }}</code>
       } @else {
         <div class="runbook-tables" aria-label="Tables in this runbook">
@@ -73,12 +75,12 @@
       }
       <footer class="preview-status">
         <span>{{ state.preview?.statements?.length ?? 0 }} pending statements</span>
-        <span>{{ state.baseline ? 'Baseline ' + state.baseline.fingerprint.slice(0, 12) : (state.operations.length > 1 ? 'New tables' : 'New table') }} · not executed</span>
+        <span>{{ state.lastAppliedTableAction === 'dropped' ? 'Table drop confirmed' : state.baseline ? 'Baseline ' + state.baseline.fingerprint.slice(0, 12) : (state.operations.length > 1 ? 'New tables' : 'New table') }} · {{ state.operations.length ? 'not executed' : 'complete' }}</span>
       </footer>
     </section>
 
     <div class="runbook-actions">
-      @if (state.baseline) {
+      @if (state.baseline && state.operations[0]?.kind !== 'dropTable') {
         <a class="subtle-button" [routerLink]="['/tables', state.table, 'schema']" [queryParams]="{ schema: state.schema }">Back to table</a>
       }
       <div class="runbook-action-group">

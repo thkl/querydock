@@ -181,6 +181,32 @@ export class WorkspacePagesService {
     }
   }
 
+  renameTablePage(connectionId: string, schema: string, oldName: string, newName: string): TableSchemaPage | null {
+    const page = this.pages().find((candidate) => candidate.connectionId === connectionId
+      && candidate.schema === schema && candidate.table === oldName);
+    if (!page) return null;
+    const route = this.router.serializeUrl(this.router.createUrlTree(
+      ['/tables', newName, 'schema'], { queryParams: { schema } },
+    ));
+    const database = this.connections.connections().find((item) => item.connectionId === connectionId)?.target.database;
+    const updated = {
+      ...page,
+      id: JSON.stringify([connectionId, schema, newName]),
+      table: newName,
+      label: newName,
+      title: `${database ? `${database} · ` : ''}${schema}.${newName}`,
+      route,
+    };
+    this.pages.update((pages) => pages.map((candidate) => candidate.id === page.id ? updated : candidate));
+    return updated;
+  }
+
+  closeTablePage(connectionId: string, schema: string, table: string): void {
+    const page = this.pages().find((candidate) => candidate.connectionId === connectionId
+      && candidate.schema === schema && candidate.table === table);
+    if (page) this.closePage(page);
+  }
+
   isActiveTable(connectionId: string, schema: string, table: string): boolean {
     const active = this.activePage();
     return active?.connectionId === connectionId && active.schema === schema && active.table === table;
