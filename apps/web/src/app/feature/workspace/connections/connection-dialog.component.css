@@ -25,6 +25,28 @@
 h2 { margin: 0; color: var(--color-foreground); font-size: 1.35em; letter-spacing: -.035em; }
 .close-button { display: grid; width: 34px; height: 34px; place-items: center; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-surface); color: var(--color-muted); cursor: pointer; font-size: 1.4em; }
 .dialog-description { margin: 14px 0 22px; color: var(--color-muted); font-size: .94em; line-height: 1.55; }
+.vault-panel { display: grid; gap: 12px; margin-bottom: 20px; padding: 16px; border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-surface); }
+.vault-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.vault-heading .eyebrow { margin-bottom: 4px; }
+.vault-heading h3 { margin: 0; color: var(--color-foreground); font-size: 1.05em; }
+.vault-copy { margin: 0; color: var(--color-muted); font-size: .88em; line-height: 1.5; }
+.vault-form { display: grid; gap: 12px; }
+.vault-unlock-form { grid-template-columns: minmax(0, 1fr) auto; align-items: end; }
+.vault-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.vault-secondary-button, .vault-link-button { min-height: 36px; padding: 0 11px; border-radius: 7px; cursor: pointer; font: inherit; font-size: .88em; font-weight: 650; }
+.vault-secondary-button { border: 1px solid var(--color-border-strong); background: var(--color-surface-solid); color: var(--color-foreground); }
+.vault-link-button { border: 1px solid transparent; background: transparent; color: var(--color-accent); }
+.saved-connections { display: grid; max-height: 200px; gap: 8px; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+.saved-connection { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-background-raised); }
+.saved-connection-details { display: grid; min-width: 0; gap: 4px; }
+.saved-connection-details strong { overflow-wrap: anywhere; color: var(--color-foreground); font-size: .91em; }
+.saved-connection-details span { color: var(--color-muted); font-size: .82em; }
+.saved-connection-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 4px; }
+.vault-message { margin: 0; color: var(--color-accent); font-size: .87em; line-height: 1.45; }
+.vault-save-retry { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.vault-reset-button { justify-self: start; padding-left: 0; color: var(--color-danger); }
+.vault-reset-confirmation { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding-top: 10px; border-top: 1px solid var(--color-border); }
+.vault-reset-confirmation p { flex-basis: 100%; margin: 0 0 4px; color: var(--color-danger); font-size: .87em; line-height: 1.45; }
 .form-grid { display: grid; grid-template-columns: 1fr 150px; gap: 14px; }
 .field { display: grid; min-width: 0; gap: 7px; color: var(--color-muted); font-size: .9em; font-weight: 600; }
 .field-host, .field-password { grid-column: 1 / -1; }
@@ -32,13 +54,20 @@ h2 { margin: 0; color: var(--color-foreground); font-size: 1.35em; letter-spacin
 .field input::placeholder { color: var(--color-muted-light); }
 .field input:focus, .field select:focus { border-color: var(--color-accent); outline: 2px solid rgb(102 239 189 / 15%); }
 .form-error { margin: 16px 0 0; padding: 10px 12px; border: 1px solid rgb(255 142 145 / 28%); border-radius: 7px; background: rgb(255 142 145 / 8%); color: var(--color-danger); font-size: .92em; line-height: 1.45; }
+.save-profile-option { display: flex; align-items: center; gap: 9px; margin-top: 14px; color: var(--color-muted); font-size: .9em; cursor: pointer; }
+.save-profile-option input { width: 16px; height: 16px; accent-color: var(--color-accent); }
 .dialog-actions { justify-content: flex-end; margin-top: 23px; }
 .cancel-button, .connect-button { min-height: 38px; padding: 0 14px; border-radius: 7px; cursor: pointer; font: inherit; font-size: .95em; font-weight: 650; }
 .cancel-button { border: 1px solid var(--color-border); background: transparent; color: var(--color-muted); }
 .connect-button { min-width: 100px; border: 1px solid var(--color-accent); background: var(--color-accent); color: var(--color-accent-ink); }
 .cancel-button:disabled, .connect-button:disabled { cursor: wait; opacity: .6; }
+.vault-secondary-button:focus-visible, .vault-link-button:focus-visible, .connect-button:focus-visible, .cancel-button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
 
 @media (max-width: 520px) {
   .connection-dialog { padding: 20px; }
   .form-grid { grid-template-columns: minmax(0, 1fr) minmax(100px, .6fr); gap: 12px; }
+  .saved-connection { align-items: flex-start; flex-direction: column; }
+  .saved-connection-actions { width: 100%; justify-content: flex-end; }
+  .vault-unlock-form { grid-template-columns: minmax(0, 1fr); }
+  .vault-save-retry { align-items: flex-start; flex-direction: column; }
 }

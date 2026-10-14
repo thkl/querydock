@@ -94,7 +94,7 @@ Do not adopt aGrid as final until this check passes. Address any gaps explicitly
 - Transaction-incompatible or transaction-control statements cannot bypass the batch policy.
 - Commit confirmation freezes exact applied SQL; later drafts form a new pending batch.
 - Lost confirmation produces an unknown outcome with no automatic retry or repair.
-- Reload restores runbook state without persisting credentials or fetched database rows.
+- Reload restores runbook state without persisting plaintext credentials or fetched database rows. Optional saved profiles remain encrypted in the separate browser vault and require its passphrase after reload.
 - Export executes successfully against an equivalent initial test schema and reproduces intended changes.
 
 The initial Apply contract uses deterministic server-side revalidation rather than a client-provided hash: the server locks the target, checks its baseline fingerprint, regenerates SQL from the structured operations, and requires an exact match with the reviewed statement list.
@@ -103,7 +103,7 @@ The initial Apply contract uses deterministic server-side revalidation rather th
 
 - Add a nullable field using a restricted PostgreSQL type list.
 - Generate SQL from structured operations on the server; lock the table, verify its baseline fingerprint, regenerate and compare the reviewed statements, then apply them in one transaction.
-- Keep the target, schema baseline, pending operations, and confirmed applied statements in browser IndexedDB. Do not persist credentials or fetched rows.
+- Keep the target, schema baseline, pending operations, and confirmed applied statements in browser IndexedDB. Do not persist credentials in runbooks or persist fetched rows; optional saved profiles use the separate encrypted connection vault.
 - Mark interrupted Apply requests as unknown and require explicit manual reconciliation before retrying or exporting that batch.
 - Current UI scope is one active table runbook and nullable field additions; support for other field operations and multi-table batches remains future work in Milestone C.
 
@@ -176,7 +176,7 @@ Define bounded fetch, query timeout, and custom-SQL result behavior before imple
 ### Deliverables and acceptance criteria
 
 - Session expiry, cookie/origin/CSRF protections, input validation, and safe error/log behavior verified.
-- Password-free saved recent connection profiles and correct target verification when reconnecting restored runbooks. Conventional username/password autocomplete supports browser-managed credential saving; no custom vault. Verify manual reconnect and active-session reuse, and check autofill with multiple profiles/repeated usernames in supported browsers without assuming automatic reconnection.
+- Optional passphrase-encrypted browser connection vault, including lock/unlock, profile removal, vault reset, and correct target verification when reconnecting restored runbooks. Verify no plaintext credentials reach runbook storage or server persistence; check browser-managed autofill and active-session reuse without assuming automatic reconnection.
 - Tests cover SQL generation, rollback, drift, destructive confirmations, batching, persistence boundaries, and uncertain outcomes.
 - Playwright covers the main schema flow and data-to-runbook flow.
 - Exported migration tested with the application's required file format once that format is supplied.

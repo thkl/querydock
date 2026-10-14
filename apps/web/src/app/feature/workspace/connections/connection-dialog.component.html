@@ -9,7 +9,101 @@
         <button class="close-button" type="button" aria-label="Close connection dialog" (click)="state.closeConnectDialog()">×</button>
       </header>
 
-      <p class="dialog-description">Credentials stay in the server’s expiring session memory and are never saved in the browser.</p>
+      <p class="dialog-description">Active credentials stay in the server’s expiring session. You can optionally keep an encrypted copy in this browser’s connection vault.</p>
+
+      <section class="vault-panel" aria-labelledby="vault-title">
+        <div class="vault-heading">
+          <div>
+            <p class="eyebrow">BROWSER STORAGE</p>
+            <h3 id="vault-title">Encrypted connection vault</h3>
+          </div>
+          @if (vault.status() === 'unlocked') {
+            <button class="vault-secondary-button" type="button" (click)="vault.lock(); vaultMessage.set(null)">Lock vault</button>
+          }
+        </div>
+
+        @if (vault.status() === 'loading') {
+          <p class="vault-copy">Checking browser storage…</p>
+        } @else if (vault.status() === 'unavailable') {
+          <p class="vault-copy" role="status">{{ vault.error() ?? 'Encrypted browser storage is unavailable.' }}</p>
+        } @else if (vault.status() === 'unconfigured') {
+          <p class="vault-copy">Choose a vault password to save connection profiles here. It is never sent to the server. If you forget it, saved profiles cannot be recovered.</p>
+          @if (vaultSetupOpen()) {
+            <form class="vault-form" autocomplete="on" (submit)="createVault($event)">
+              <label class="field">
+                <span>Vault password</span>
+                <input name="vaultPassword" type="password" autocomplete="new-password" minlength="12" required />
+              </label>
+              <label class="field">
+                <span>Confirm vault password</span>
+                <input name="confirmVaultPassword" type="password" autocomplete="new-password" minlength="12" required />
+              </label>
+              <div class="vault-actions">
+                <button class="vault-secondary-button" type="button" (click)="vaultSetupOpen.set(false)">Cancel</button>
+                <button class="connect-button" type="submit">Create vault</button>
+              </div>
+            </form>
+          } @else {
+            <button class="vault-secondary-button" type="button" (click)="vaultSetupOpen.set(true)">Set up vault</button>
+          }
+        } @else if (vault.status() === 'locked') {
+          <p class="vault-copy">Unlock to use saved connections. The vault password is only used in this browser.</p>
+          <form class="vault-form vault-unlock-form" autocomplete="on" (submit)="unlockVault($event)">
+            <label class="field">
+              <span>Vault password</span>
+              <input name="vaultPassword" type="password" autocomplete="current-password" required />
+            </label>
+            <button class="connect-button" type="submit">Unlock</button>
+          </form>
+        } @else {
+          <p class="vault-copy">Unlocked for this page session. Saved connection details are decrypted in memory until you lock the vault or close this page.</p>
+          @if (vault.profiles().length) {
+            <ul class="saved-connections">
+              @for (profile of vault.profiles(); track profile.id) {
+                <li class="saved-connection">
+                  <div class="saved-connection-details">
+                    <strong>{{ profileLabel(profile) }}</strong>
+                    <span>{{ profile.configuration.username }} · {{ profile.configuration.sslMode }}</span>
+                  </div>
+                  <div class="saved-connection-actions">
+                    <button class="vault-secondary-button" type="button" (click)="connectSaved(profile)">Connect</button>
+                    @if (forgettingProfileId() === profile.id) {
+                      <button class="vault-link-button" type="button" (click)="forgetProfile(profile)">Confirm remove</button>
+                      <button class="vault-link-button" type="button" (click)="forgettingProfileId.set(null)">Cancel</button>
+                    } @else {
+                      <button class="vault-link-button" type="button" (click)="forgetProfile(profile)">Forget</button>
+                    }
+                  </div>
+                </li>
+              }
+            </ul>
+          } @else {
+            <p class="vault-copy">No saved connections yet.</p>
+          }
+        }
+
+        @if (vaultMessage()) {
+          <p class="vault-message" role="status">{{ vaultMessage() }}</p>
+        }
+        @if (pendingVaultSave()) {
+          <div class="vault-save-retry">
+            <p class="vault-copy">The database connection succeeded, but its encrypted profile was not saved. Retry the save without reconnecting.</p>
+            <button class="vault-secondary-button" type="button" (click)="retryVaultSave()">Retry save</button>
+          </div>
+        }
+
+        @if (vault.status() === 'locked' || vault.status() === 'unlocked') {
+          @if (resetVaultArmed()) {
+            <div class="vault-reset-confirmation" role="group" aria-label="Confirm vault deletion">
+              <p>This permanently deletes the encrypted vault and every saved connection in it.</p>
+              <button class="vault-link-button" type="button" (click)="resetVault()">Delete vault</button>
+              <button class="vault-link-button" type="button" (click)="resetVaultArmed.set(false)">Cancel</button>
+            </div>
+          } @else {
+            <button class="vault-link-button vault-reset-button" type="button" (click)="resetVault()">Delete vault</button>
+          }
+        }
+      </section>
 
       <form autocomplete="on" (submit)="submit($event)">
         <div class="form-grid">
@@ -43,13 +137,20 @@
           </label>
         </div>
 
+        @if (vault.status() === 'unlocked') {
+          <label class="save-profile-option">
+            <input name="saveInVault" type="checkbox" />
+            <span>Save this connection in the encrypted browser vault</span>
+          </label>
+        }
+
         @if (state.connectError()) {
           <p class="form-error" role="alert">{{ state.connectError() }}</p>
         }
 
         <footer class="dialog-actions">
           <button class="cancel-button" type="button" [disabled]="state.connecting()" (click)="state.closeConnectDialog()">Cancel</button>
-          <button class="connect-button" type="submit" [disabled]="state.connecting()">
+          <button class="connect-button" type="submit" [disabled]="state.connecting() || pendingVaultSave() !== null">
             @if (state.connecting()) { Connecting… } @else { Connect }
           </button>
         </footer>

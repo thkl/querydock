@@ -156,8 +156,8 @@ Example: add a nullable field, backfill its values, then make it non-nullable.
 
 | Location | Stored state |
 | --- | --- |
-| Browser IndexedDB | Settings and unfinished runbooks, including their necessary original schema baselines, pending SQL, and applied SQL needed for eventual export |
-| Browser memory | Fetched database rows, query results, fetched schema metadata, ordinary unsaved data edits, and active UI state |
+| Browser IndexedDB | Settings and unfinished runbooks, including their necessary original schema baselines, pending SQL, and applied SQL needed for eventual export; optional saved connection profiles are stored only as authenticated ciphertext in a separate vault database |
+| Browser memory | Fetched database rows, query results, fetched schema metadata, ordinary unsaved data edits, active UI state, and decrypted connection profiles while the vault is unlocked |
 | Expiring server session | Database credentials and connection configuration |
 | Server persistent storage | None for application state, runbooks, database data, or execution history |
 
@@ -173,10 +173,10 @@ No SQLite database or persistent server volume is required for application state
 
 - No separate application account system for the initial local tool.
 - Authenticate database access using database-native credentials and preserve that user's privileges.
-- Keep active connection credentials server-side in expiring browser sessions; do not return them to the frontend. QueryDock does not persist passwords in browser storage.
+- Keep active connection credentials server-side in expiring browser sessions; do not return them in API responses. Users may opt to save complete connection profiles in a separate browser IndexedDB vault encrypted with a passphrase they choose. Derive a non-extractable AES-GCM-256 key with PBKDF2-HMAC-SHA-256 (600,000 iterations and a random 128-bit salt); use a fresh random 96-bit IV and authenticated record context for every encrypted item. Never store or send the vault passphrase or plaintext saved profile to the server. Decrypt profiles only in memory after explicit unlock; lock on page reload or user request. There is no password recovery: resetting the vault deletes saved profiles. This protects data at rest in IndexedDB, not against malicious same-origin code or a compromised browser while unlocked.
 - One browser session can hold multiple connection configurations.
 - Save recent connection profiles without passwords: display name, host, port, database, username, and connection options. Reuse active sessions or prompt for the password when reconnecting.
-- Use a conventional connection form with `autocomplete="username"` and `autocomplete="current-password"` so the user's browser/password manager can offer credential saving and autofill. No custom credential vault or master-password system.
+- Use a conventional connection form with `autocomplete="username"` and `autocomplete="current-password"` so the user's browser/password manager can offer credential saving and autofill. Any recent-connection list remains password-free; explicitly saved profiles in the optional QueryDock vault may include credentials only as encrypted browser IndexedDB records.
 - Browser-managed saving/autofill varies by browser and associates credentials with QueryDock's origin, so multiple database profiles, particularly repeated usernames, may require manual credential selection. Do not promise automatic one-click reconnection after session expiry.
 - Obtain database connections on demand and release/close them after use.
 - Session expiry or server restart requires reconnecting before continuing a locally saved runbook.

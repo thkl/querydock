@@ -63,7 +63,7 @@ export class ConnectionApiService {
     }
   }
 
-  async connect(configuration: PostgresConnectRequest): Promise<boolean> {
+  async connect(configuration: PostgresConnectRequest, closeOnSuccess = true): Promise<boolean> {
     this.connectError.set(null);
     this.connecting.set(true);
     try {
@@ -76,7 +76,7 @@ export class ConnectionApiService {
         connection,
       ]);
       this.activeConnectionId.set(connection.connectionId);
-      this.connectDialogOpen.set(false);
+      if (closeOnSuccess) this.connectDialogOpen.set(false);
       await this.loadResources(connection.connectionId).catch((error: unknown) => {
         this.setResourceError(connection.connectionId, errorMessage(error));
       });
