@@ -78,7 +78,8 @@ export class RunbookService {
     const baseline = current?.baseline ?? snapshot;
     const key = draft.sourceName ?? replacementName ?? draft.name;
     const matches = (candidate: SchemaOperation): boolean => candidate.name === key;
-    const retained = (current?.operations ?? []).filter((candidate) => !matches(candidate));
+    const retained = (current?.operations ?? []).filter((candidate) =>
+      !(candidate.kind === 'addNullableField' || candidate.kind === 'alterField') || !matches(candidate));
     const request: SchemaFieldDraftRequest = {
       schema: baseline.schema,
       table: baseline.name,
@@ -99,6 +100,64 @@ export class RunbookService {
         return;
       }
       const { operations, ...preview } = fieldPreview;
+      const runbook: SchemaRunbook = {
+        target: connection.target,
+        schema: baseline.schema,
+        table: baseline.name,
+        baseline,
+        operations,
+        preview,
+        appliedBatches: current?.appliedBatches ?? [],
+        applyOutcomeUnknown: false,
+      };
+      this.runbook.set(runbook);
+      await this.persist(runbook);
+    } catch (error) {
+      this.error.set(messageOf(error));
+      throw error;
+    } finally {
+      this.previewing.set(false);
+    }
+  }
+
+  async stageSchemaOperation(
+    connection: ConnectResponse,
+    snapshot: TableSnapshot,
+    operation: Extract<SchemaOperation, { kind: 'addConstraint' | 'dropConstraint' }> | null,
+    replacementName: string,
+  ): Promise<void> {
+    await this.ready;
+    this.error.set(null);
+    const current = this.runbook();
+    if (current?.applyOutcomeUnknown) {
+      throw new Error('The previous Apply outcome is unknown. Inspect the database before staging or applying more changes.');
+    }
+    if (current && (!sameTarget(current.target, connection.target)
+      || current.schema !== snapshot.schema || current.table !== snapshot.name)) {
+      throw new Error('The open runbook belongs to another database or table. Export any applied SQL, then clear it before starting a different runbook.');
+    }
+
+    const baseline = current?.baseline ?? snapshot;
+    const retained = (current?.operations ?? []).filter((candidate) =>
+      !(candidate.kind === 'addConstraint' || candidate.kind === 'dropConstraint') || candidate.name !== replacementName);
+    const operations = operation ? [...retained, operation] : retained;
+    if (!operations.length) {
+      if (current) {
+        const updated = { ...current, operations: [], preview: null };
+        this.runbook.set(updated);
+        await this.persist(updated);
+      }
+      return;
+    }
+
+    this.previewing.set(true);
+    try {
+      const preview = await this.connections.previewMigration(connection.connectionId, {
+        schema: baseline.schema,
+        table: baseline.name,
+        baselineFingerprint: baseline.fingerprint,
+        operations,
+      });
       const runbook: SchemaRunbook = {
         target: connection.target,
         schema: baseline.schema,
@@ -206,14 +265,9 @@ export class RunbookService {
 
     const snapshot = await this.connections.inspectTable(connection.connectionId, current.schema, current.table);
     if (outcome === 'applied') {
-      const actualFields = new Map(snapshot.fields.map((field) => [field.name, field]));
-      const allFieldsPresent = current.operations.every((operation) => {
-        const expectedName = operation.kind === 'alterField' ? operation.newName : operation.name;
-        const field = actualFields.get(expectedName);
-        return field !== undefined && operationMatchesField(field, operation);
-      });
-      if (!allFieldsPresent) {
-        throw new Error('The database does not contain every field change from this batch with the expected type and default. Keep the outcome unknown and inspect it manually.');
+      const allChangesPresent = current.operations.every((operation) => operationMatchesSnapshot(snapshot, operation));
+      if (!allChangesPresent) {
+        throw new Error('The database does not contain every expected schema change from this batch. Keep the outcome unknown and inspect it manually.');
       }
       const updated: SchemaRunbook = {
         ...current,
@@ -334,15 +388,35 @@ function isUncertainApplyError(error: unknown): boolean {
 
 function operationMatchesField(
   field: TableSnapshot['fields'][number],
-  operation: SchemaOperation,
+  operation: Extract<SchemaOperation, { kind: 'addNullableField' | 'alterField' }>,
 ): boolean {
   const typeMatches = field.editableType === operation.type
     && field.characterMaximumLength === (operation.characterMaximumLength ?? null)
     && field.numericPrecision === (operation.numericPrecision ?? null)
     && field.numericScale === (operation.numericScale ?? null);
   const defaultExpression = operation.defaultExpression?.trim() ?? null;
-  return typeMatches && (field.defaultExpression?.trim() ?? null) === defaultExpression
-    && (operation.kind === 'alterField' || field.nullable);
+  const nullableMatches = operation.kind === 'addNullableField'
+    ? field.nullable
+    : operation.nullable === undefined || field.nullable === operation.nullable;
+  return typeMatches && (field.defaultExpression?.trim() ?? null) === defaultExpression && nullableMatches;
+}
+
+function operationMatchesSnapshot(snapshot: TableSnapshot, operation: SchemaOperation): boolean {
+  if (operation.kind === 'addNullableField' || operation.kind === 'alterField') {
+    const name = operation.kind === 'alterField' ? operation.newName : operation.name;
+    const field = snapshot.fields.find((candidate) => candidate.name === name);
+    return field !== undefined && operationMatchesField(field, operation);
+  }
+  const constraint = snapshot.constraints.find((candidate) => candidate.name === operation.name);
+  if (operation.kind === 'dropConstraint') return constraint === undefined;
+  if (!constraint || constraint.kind !== operation.constraintKind) return false;
+  if (operation.constraintKind === 'check') {
+    const normalize = (value: string) => value.replace(/^CHECK\s*/i, '').replaceAll('"', '')
+      .replace(/[\s()]/g, '').toLowerCase();
+    return normalize(constraint.definition) === normalize(operation.expression);
+  }
+  return constraint.fieldNames.length === operation.fieldNames.length
+    && constraint.fieldNames.every((name, index) => name === operation.fieldNames[index]);
 }
 
 function requestResult<T>(request: IDBRequest<T>): Promise<T> {

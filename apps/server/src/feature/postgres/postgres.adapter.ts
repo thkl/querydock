@@ -5,6 +5,7 @@ import type {
   MigrationApplyResponse,
   MigrationPreviewRequest,
   MigrationPreviewResponse,
+  EditableConstraintKind,
   SchemaFieldDraftRequest,
   SchemaFieldDraftResponse,
   SchemaOperation,
@@ -55,6 +56,12 @@ const POSTGRES_EDITABLE_FIELD_TYPES = [
   { value: 'timestamptz', label: 'Timestamp with time zone', typeSchema: 'pg_catalog', typeName: 'timestamptz' },
   { value: 'jsonb', label: 'JSON', typeSchema: 'pg_catalog', typeName: 'jsonb' },
 ] as const;
+
+const POSTGRES_EDITABLE_CONSTRAINT_KINDS: { value: EditableConstraintKind; label: string }[] = [
+  { value: 'primaryKey', label: 'Primary key' },
+  { value: 'unique', label: 'Unique' },
+  { value: 'check', label: 'Check' },
+];
 
 interface ConstraintRow {
   name: string;
@@ -312,6 +319,7 @@ export class PostgresAdapter {
     const constraints: TableConstraintDescriptor[] = constraintResult.rows.map((row) => ({
       name: row.name,
       kind: constraintKind(row.constraintType),
+      editable: resource.canAlter && (row.constraintType === 'p' || row.constraintType === 'u' || row.constraintType === 'c'),
       fieldNames: row.fieldNames ?? [],
       definition: row.definition,
       referencedSchema: row.referencedSchema,
@@ -325,11 +333,26 @@ export class PostgresAdapter {
       fields,
       constraints,
     };
-    const fingerprint = createHash('sha256').update(JSON.stringify(baseline)).digest('hex');
+    const fingerprintBaseline = {
+      ...baseline,
+      constraints: constraints.map((constraint) => ({
+        name: constraint.name,
+        kind: constraint.kind,
+        fieldNames: constraint.fieldNames,
+        definition: constraint.definition,
+        referencedSchema: constraint.referencedSchema,
+        referencedTable: constraint.referencedTable,
+        referencedFieldNames: constraint.referencedFieldNames,
+      })),
+    };
+    const fingerprint = createHash('sha256').update(JSON.stringify(fingerprintBaseline)).digest('hex');
 
     return {
       ...baseline,
       editableFieldTypes: [...POSTGRES_EDITABLE_FIELD_TYPES],
+      editableConstraintKinds: resource.canAlter && ['table', 'partitionedTable'].includes(resource.kind)
+        ? [...POSTGRES_EDITABLE_CONSTRAINT_KINDS]
+        : [],
       fields,
       canAlter: resource.canAlter,
       fingerprint,
@@ -453,14 +476,15 @@ function normalizeFieldDraft(
   if (field.generated || field.identityGeneration) {
     throw new MigrationPlanError('invalid', `Generated field "${draft.sourceName}" cannot be edited by this migration.`);
   }
+  const nullable = draft.nullable ?? field.nullable;
   const currentDefault = field.defaultExpression?.trim() ?? null;
   if (name === field.name && fieldTypeFor(field.dataType) === type
     && field.characterMaximumLength === characterMaximumLength
     && field.numericPrecision === numericPrecision && field.numericScale === numericScale
-    && currentDefault === defaultExpression) return null;
+    && currentDefault === defaultExpression && field.nullable === nullable) return null;
   return {
     kind: 'alterField', name: draft.sourceName, newName: name, type, typeDetails,
-    characterMaximumLength, numericPrecision, numericScale, defaultExpression,
+    characterMaximumLength, numericPrecision, numericScale, defaultExpression, nullable,
   };
 }
 
@@ -471,25 +495,35 @@ function createMigrationPreview(snapshot: TableSnapshot, request: MigrationPrevi
 
   const table = `${quoteIdentifier(snapshot.schema)}.${quoteIdentifier(snapshot.name)}`;
   const currentNames = new Set(snapshot.fields.map(({ name }) => name));
+  const fieldOperations = request.operations.filter((operation) =>
+    operation.kind === 'addNullableField' || operation.kind === 'alterField');
+  const renamedFieldNames = new Map(fieldOperations.flatMap((operation) =>
+    operation.kind === 'alterField' ? [[operation.name, operation.newName] as const] : []));
+  const availableFieldNames = new Set([
+    ...currentNames,
+    ...fieldOperations.flatMap((operation) => operation.kind === 'addNullableField' ? [operation.name] : [operation.newName]),
+  ]);
   const finalNames = new Map<string, string>();
-  const operationSources = new Set<string>();
+  const fieldSources = new Set<string>();
+  const constraintSources = new Map<string, 'add' | 'drop'>();
+  const currentConstraintNames = new Set(snapshot.constraints.map(({ name }) => name));
   for (const operation of request.operations) {
     if (operation.kind === 'addNullableField') {
       validateFieldName(operation.name);
-      if (operationSources.has(operation.name)) {
+      if (fieldSources.has(operation.name)) {
         throw new MigrationPlanError('invalid', `A field operation for "${operation.name}" appears more than once.`);
       }
-      operationSources.add(operation.name);
+      fieldSources.add(operation.name);
       if (currentNames.has(operation.name) || [...finalNames.values()].includes(operation.name)) {
         throw new MigrationPlanError('invalid', `A field named "${operation.name}" already exists or is already in this plan.`);
       }
       finalNames.set(operation.name, operation.name);
-    } else {
+    } else if (operation.kind === 'alterField') {
       validateFieldName(operation.newName);
-      if (operationSources.has(operation.name)) {
+      if (fieldSources.has(operation.name)) {
         throw new MigrationPlanError('invalid', `A field operation for "${operation.name}" appears more than once.`);
       }
-      operationSources.add(operation.name);
+      fieldSources.add(operation.name);
       if (!currentNames.has(operation.name)) {
         throw new MigrationPlanError('invalid', `The field "${operation.name}" no longer exists.`);
       }
@@ -498,16 +532,80 @@ function createMigrationPreview(snapshot: TableSnapshot, request: MigrationPrevi
         || [...finalNames.values()].includes(targetName);
       if (collision) throw new MigrationPlanError('invalid', `A field named "${targetName}" already exists or is already in this plan.`);
       finalNames.set(operation.name, targetName);
+    } else if (operation.kind === 'addConstraint') {
+      validatePostgresIdentifier(operation.name, 'constraint');
+      const previousConstraintOperation = constraintSources.get(operation.name);
+      if (previousConstraintOperation === 'add'
+        || (previousConstraintOperation === 'drop' && !currentConstraintNames.has(operation.name))) {
+        throw new MigrationPlanError('invalid', `A constraint operation for "${operation.name}" appears more than once.`);
+      }
+      constraintSources.set(operation.name, 'add');
+      const scheduledDrop = request.operations.some((candidate) =>
+        candidate.kind === 'dropConstraint' && candidate.name === operation.name);
+      if (currentConstraintNames.has(operation.name) && !scheduledDrop) {
+        throw new MigrationPlanError('invalid', `A constraint named "${operation.name}" already exists on this table.`);
+      }
+      const replacingPrimaryKey = request.operations.some((candidate) => candidate.kind === 'dropConstraint'
+        && snapshot.constraints.some(({ name, kind }) => name === candidate.name && kind === 'primaryKey'));
+      if (operation.constraintKind === 'primaryKey'
+        && snapshot.constraints.some(({ kind }) => kind === 'primaryKey') && !replacingPrimaryKey) {
+        throw new MigrationPlanError('invalid', 'This table already has a primary key. Drop it before adding another.');
+      }
+      if (operation.constraintKind === 'primaryKey'
+        && request.operations.some((candidate) => candidate.kind === 'addConstraint' && candidate.constraintKind === 'primaryKey'
+          && candidate !== operation)) {
+        throw new MigrationPlanError('invalid', 'A table can have only one primary key.');
+      }
+      if (operation.constraintKind === 'check') {
+        normalizeCheckExpression(operation.expression, availableFieldNames, renamedFieldNames);
+      } else {
+        const seenFields = new Set<string>();
+        for (const name of operation.fieldNames) {
+          validatePostgresIdentifier(name, 'field');
+          if (!availableFieldNames.has(name)) throw new MigrationPlanError('invalid', `The field "${name}" does not exist on this table or in this plan.`);
+          const resolvedName = renamedFieldNames.get(name) ?? name;
+          if (seenFields.has(resolvedName)) throw new MigrationPlanError('invalid', `The field "${name}" appears more than once in this constraint.`);
+          seenFields.add(resolvedName);
+        }
+      }
+    } else {
+      validatePostgresIdentifier(operation.name, 'constraint');
+      const previousConstraintOperation = constraintSources.get(operation.name);
+      if (previousConstraintOperation === 'drop'
+        || (previousConstraintOperation === 'add' && !currentConstraintNames.has(operation.name))) {
+        throw new MigrationPlanError('invalid', `A constraint operation for "${operation.name}" appears more than once.`);
+      }
+      constraintSources.set(operation.name, 'drop');
+      const constraint = snapshot.constraints.find(({ name }) => name === operation.name);
+      if (!constraint) throw new MigrationPlanError('invalid', `The constraint "${operation.name}" no longer exists.`);
+      if (constraint.kind !== 'primaryKey' && constraint.kind !== 'unique' && constraint.kind !== 'check') {
+        throw new MigrationPlanError('invalid', `Removing ${constraint.kind} constraints is not supported yet.`);
+      }
     }
   }
 
-  return request.operations.flatMap((operation) => {
+  const orderedOperations = [
+    ...request.operations.filter((operation) => operation.kind === 'dropConstraint'),
+    ...fieldOperations,
+    ...request.operations.filter((operation) => operation.kind === 'addConstraint'),
+  ];
+  return orderedOperations.flatMap((operation) => {
     if (operation.kind === 'addNullableField') {
       const typeSql = formatFieldType(operation);
       const defaultSql = operation.defaultExpression ? ` DEFAULT ${validateDefaultExpression(operation.defaultExpression)}` : '';
       return [`ALTER TABLE ${table} ADD COLUMN ${quoteIdentifier(operation.name)} ${typeSql}${defaultSql};`];
     }
-    return statementsForAlterField(table, snapshot, operation);
+    if (operation.kind === 'alterField') return statementsForAlterField(table, snapshot, operation);
+    if (operation.kind === 'dropConstraint') {
+      return [`ALTER TABLE ${table} DROP CONSTRAINT ${quoteIdentifier(operation.name)};`];
+    }
+    if (operation.constraintKind === 'check') {
+      const expression = normalizeCheckExpression(operation.expression, availableFieldNames, renamedFieldNames);
+      return [`ALTER TABLE ${table} ADD CONSTRAINT ${quoteIdentifier(operation.name)} CHECK (${expression});`];
+    }
+    const kindSql = operation.constraintKind === 'primaryKey' ? 'PRIMARY KEY' : 'UNIQUE';
+    const fields = operation.fieldNames.map((name) => quoteIdentifier(renamedFieldNames.get(name) ?? name)).join(', ');
+    return [`ALTER TABLE ${table} ADD CONSTRAINT ${quoteIdentifier(operation.name)} ${kindSql} (${fields});`];
   });
 }
 
@@ -550,6 +648,11 @@ function statementsForAlterField(
       ? `ALTER TABLE ${table} ALTER COLUMN ${finalName} DROP DEFAULT;`
       : `ALTER TABLE ${table} ALTER COLUMN ${finalName} SET DEFAULT ${validateDefaultExpression(nextDefault)};`);
   }
+  if (operation.nullable !== undefined && operation.nullable !== field.nullable) {
+    statements.push(operation.nullable
+      ? `ALTER TABLE ${table} ALTER COLUMN ${finalName} DROP NOT NULL;`
+      : `ALTER TABLE ${table} ALTER COLUMN ${finalName} SET NOT NULL;`);
+  }
   return statements;
 }
 
@@ -572,7 +675,7 @@ function normalizeFieldType(dataType: string): string {
   return dataType;
 }
 
-function formatFieldType(operation: Pick<SchemaOperation, 'type'> & {
+function formatFieldType(operation: Pick<Extract<SchemaOperation, { kind: 'addNullableField' | 'alterField' }>, 'type'> & {
   characterMaximumLength?: number | null;
   numericPrecision?: number | null;
   numericScale?: number | null;
@@ -628,6 +731,22 @@ function collectMigrationWarnings(snapshot: TableSnapshot, operations: SchemaOpe
       if (field && !sameFieldType(field, operation)) {
         warnings.push(`Changing the type of "${operation.name}" may fail or transform existing values. Review the conversion before applying.`);
       }
+      if (field?.nullable && operation.nullable === false) {
+        warnings.push(`Making "${operation.name}" NOT NULL may fail if existing rows contain NULL values. Review the data before applying.`);
+      }
+    }
+    if (operation.kind === 'addConstraint' && operation.constraintKind === 'primaryKey') {
+      const nullableFields = operation.fieldNames.filter((name) => snapshot.fields.find((field) => field.name === name)?.nullable);
+      if (nullableFields.length) {
+        warnings.push(`Adding a primary key makes ${nullableFields.map((name) => `"${name}"`).join(', ')} NOT NULL and may fail if existing rows contain NULL values.`);
+      }
+    }
+    if (operation.kind === 'addConstraint' && operation.constraintKind === 'check') {
+      warnings.push(`Adding the CHECK constraint "${operation.name}" may fail if existing rows do not satisfy its expression.`);
+    }
+    if (operation.kind === 'dropConstraint') {
+      const constraint = snapshot.constraints.find(({ name }) => name === operation.name);
+      if (constraint) warnings.push(`Dropping the ${constraint.kind} constraint "${operation.name}" reduces database integrity protection. Review dependent data and objects.`);
     }
   }
   return warnings;
@@ -637,7 +756,7 @@ function validateFieldName(name: string): void {
   validatePostgresIdentifier(name, 'field');
 }
 
-function validatePostgresIdentifier(name: string, kind: 'schema' | 'table' | 'field'): void {
+function validatePostgresIdentifier(name: string, kind: 'schema' | 'table' | 'field' | 'constraint'): void {
   if (!name.trim() || name.includes('\0') || Buffer.byteLength(name, 'utf8') > 63) {
     throw new MigrationPlanError('invalid', `Enter a non-empty PostgreSQL ${kind} name that fits within 63 bytes.`);
   }
@@ -653,6 +772,185 @@ function validateDefaultExpression(expression: string): string {
 
 function quoteIdentifier(identifier: string): string {
   return `"${identifier.replaceAll('"', '""')}"`;
+}
+
+type CheckToken = { kind: 'identifier' | 'number' | 'string' | 'operator' | 'punctuation'; value: string; quoted?: boolean };
+
+function normalizeCheckExpression(
+  source: string,
+  availableFieldNames: Set<string>,
+  renamedFieldNames: Map<string, string>,
+): string {
+  const tokens = tokenizeCheckExpression(source);
+  let position = 0;
+  const peek = (value?: string): boolean => {
+    const token = tokens[position];
+    if (!token) return false;
+    if (value === undefined) return true;
+    const keyword = ['AND', 'BETWEEN', 'FALSE', 'ILIKE', 'IN', 'IS', 'LIKE', 'NOT', 'NULL', 'OR', 'TRUE'];
+    if (token.quoted && keyword.includes(value.toUpperCase())) return false;
+    return token.value.toUpperCase() === value.toUpperCase();
+  };
+  const take = (value?: string): CheckToken => {
+    const token = tokens[position];
+    if (!token || (value !== undefined && token.value.toUpperCase() !== value)) {
+      throw new MigrationPlanError('invalid', `Expected ${value ?? 'an expression value'} in the CHECK expression.`);
+    }
+    position += 1;
+    return token;
+  };
+  const fieldSql = (token: CheckToken): string => {
+    const name = token.quoted ? token.value : token.value.toLowerCase();
+    if (!availableFieldNames.has(name)) {
+      throw new MigrationPlanError('invalid', `The field "${name}" in the CHECK expression does not exist on this table or in this plan.`);
+    }
+    return quoteIdentifier(renamedFieldNames.get(name) ?? name);
+  };
+  const parsePrimary = (): string => {
+    if (peek('(')) {
+      take('(');
+      const expression = parseOr();
+      take(')');
+      return `(${expression})`;
+    }
+    const token = take();
+    if (token.kind === 'identifier') {
+      if (!token.quoted && ['TRUE', 'FALSE', 'NULL'].includes(token.value.toUpperCase())) {
+        return token.value.toUpperCase();
+      }
+      return fieldSql(token);
+    }
+    if (token.kind === 'number' || token.kind === 'string') return token.value;
+    throw new MigrationPlanError('invalid', 'Use table fields, numbers, quoted strings, TRUE, FALSE, or NULL in the CHECK expression.');
+  };
+  const parseUnary = (): string => {
+    if (peek('+') || peek('-')) return `${take().value}${parseUnary()}`;
+    return parsePrimary();
+  };
+  const parseMultiply = (): string => {
+    let expression = parseUnary();
+    while (peek('*') || peek('/') || peek('%')) expression = `(${expression} ${take().value} ${parseUnary()})`;
+    return expression;
+  };
+  const parseAdd = (): string => {
+    let expression = parseMultiply();
+    while (peek('+') || peek('-')) expression = `(${expression} ${take().value} ${parseMultiply()})`;
+    return expression;
+  };
+  const parseCompare = (): string => {
+    const left = parseAdd();
+    if (peek('IS')) {
+      take('IS');
+      const not = peek('NOT') ? (take('NOT'), ' NOT') : '';
+      take('NULL');
+      return `(${left} IS${not} NULL)`;
+    }
+    let not = false;
+    if (peek('NOT')) {
+      take('NOT');
+      not = true;
+    }
+    if (peek('IN')) {
+      take('IN');
+      take('(');
+      const values = [parseAdd()];
+      while (peek(',')) { take(','); values.push(parseAdd()); }
+      take(')');
+      return `(${left}${not ? ' NOT' : ''} IN (${values.join(', ')}))`;
+    }
+    if (peek('BETWEEN')) {
+      take('BETWEEN');
+      const lower = parseAdd();
+      take('AND');
+      const upper = parseAdd();
+      return `(${left}${not ? ' NOT' : ''} BETWEEN ${lower} AND ${upper})`;
+    }
+    if (peek('LIKE') || peek('ILIKE')) return `(${left}${not ? ' NOT' : ''} ${take().value.toUpperCase()} ${parseAdd()})`;
+    if (not) throw new MigrationPlanError('invalid', 'NOT in a CHECK expression must be followed by IN, BETWEEN, LIKE, or ILIKE.');
+    if (tokens[position]?.kind === 'operator') return `(${left} ${take().value} ${parseAdd()})`;
+    return left;
+  };
+  const parseNot = (): string => {
+    if (peek('NOT')) {
+      take('NOT');
+      return `(NOT ${parseNot()})`;
+    }
+    return parseCompare();
+  };
+  const parseAnd = (): string => {
+    let expression = parseNot();
+    while (peek('AND')) { take('AND'); expression = `(${expression} AND ${parseNot()})`; }
+    return expression;
+  };
+  const parseOr = (): string => {
+    let expression = parseAnd();
+    while (peek('OR')) { take('OR'); expression = `(${expression} OR ${parseAnd()})`; }
+    return expression;
+  };
+
+  const expression = parseOr();
+  if (position !== tokens.length) {
+    throw new MigrationPlanError('invalid', 'The CHECK expression contains unsupported SQL. Use fields, literals, comparisons, IN, BETWEEN, LIKE, AND, OR, NOT, and parentheses.');
+  }
+  return expression;
+}
+
+function tokenizeCheckExpression(source: string): CheckToken[] {
+  const tokens: CheckToken[] = [];
+  let position = 0;
+  while (position < source.length) {
+    if (/\s/.test(source[position])) { position += 1; continue; }
+    const start = position;
+    const character = source[position];
+    if (character === '"') {
+      position += 1;
+      let value = '';
+      let closed = false;
+      while (position < source.length) {
+        if (source[position] === '"') {
+          if (source[position + 1] === '"') { value += '"'; position += 2; }
+          else { position += 1; closed = true; break; }
+        } else value += source[position++];
+      }
+      if (!closed) throw new MigrationPlanError('invalid', 'Close the quoted field name in the CHECK expression.');
+      tokens.push({ kind: 'identifier', value, quoted: true });
+    } else if (character === "'") {
+      position += 1;
+      let closed = false;
+      while (position < source.length) {
+        if (source[position] === "'") {
+          if (source[position + 1] === "'") position += 2;
+          else { position += 1; closed = true; break; }
+        } else position += 1;
+      }
+      if (!closed) throw new MigrationPlanError('invalid', 'Close the quoted string in the CHECK expression.');
+      tokens.push({ kind: 'string', value: source.slice(start, position) });
+    } else if (/[0-9]/.test(character)) {
+      const match = /^(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?/.exec(source.slice(position));
+      if (!match) throw new MigrationPlanError('invalid', 'Enter a valid number in the CHECK expression.');
+      position += match[0].length;
+      tokens.push({ kind: 'number', value: match[0] });
+    } else if (/[A-Za-z_]/.test(character)) {
+      const match = /^[A-Za-z_][A-Za-z0-9_$]*/.exec(source.slice(position));
+      if (!match) throw new MigrationPlanError('invalid', 'Enter a valid field name in the CHECK expression.');
+      position += match[0].length;
+      tokens.push({ kind: 'identifier', value: match[0] });
+    } else if (['<=', '>=', '<>', '!='].some((operator) => source.startsWith(operator, position))) {
+      const value = ['<=', '>=', '<>', '!='].find((operator) => source.startsWith(operator, position))!;
+      position += value.length;
+      tokens.push({ kind: 'operator', value });
+    } else if ('=<>'.includes(character)) {
+      position += 1;
+      tokens.push({ kind: 'operator', value: character });
+    } else if ('(),+-*/%'.includes(character)) {
+      position += 1;
+      tokens.push({ kind: 'punctuation', value: character });
+    } else {
+      throw new MigrationPlanError('invalid', `The character "${character}" is not supported in a CHECK expression.`);
+    }
+  }
+  if (!tokens.length) throw new MigrationPlanError('invalid', 'Enter a CHECK expression.');
+  return tokens;
 }
 
 function sameStatements(expected: string[], reviewed: string[]): boolean {

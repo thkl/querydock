@@ -70,6 +70,7 @@ export type TableFieldDescriptor = z.infer<typeof tableFieldDescriptorSchema>;
 export const tableConstraintDescriptorSchema = z.object({
   name: z.string(),
   kind: z.enum(['primaryKey', 'unique', 'foreignKey', 'check', 'exclusion']),
+  editable: z.boolean(),
   fieldNames: z.array(z.string()),
   definition: z.string(),
   referencedSchema: z.string().nullable(),
@@ -79,6 +80,9 @@ export const tableConstraintDescriptorSchema = z.object({
 
 export type TableConstraintDescriptor = z.infer<typeof tableConstraintDescriptorSchema>;
 
+export const editableConstraintKindSchema = z.enum(['primaryKey', 'unique', 'check']);
+export type EditableConstraintKind = z.infer<typeof editableConstraintKindSchema>;
+
 export const tableSnapshotSchema = z.object({
   schema: z.string(),
   name: z.string(),
@@ -86,6 +90,7 @@ export const tableSnapshotSchema = z.object({
   canAlter: z.boolean(),
   fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
   editableFieldTypes: z.array(z.object({ value: z.string(), label: z.string(), typeSchema: z.string(), typeName: z.string() })),
+  editableConstraintKinds: z.array(z.object({ value: editableConstraintKindSchema, label: z.string() })),
   fields: z.array(tableFieldDescriptorSchema),
   constraints: z.array(tableConstraintDescriptorSchema),
 });
@@ -120,13 +125,40 @@ export const alterFieldOperationSchema = z.object({
   numericPrecision: z.number().nullable(),
   numericScale: z.number().nullable(),
   defaultExpression: z.string().max(4096).nullable(),
+  nullable: z.boolean().optional(),
 });
 
 export type AlterFieldOperation = z.infer<typeof alterFieldOperationSchema>;
 
+export const addConstraintOperationSchema = z.discriminatedUnion('constraintKind', [
+  z.object({
+    kind: z.literal('addConstraint'),
+    constraintKind: z.enum(['primaryKey', 'unique']),
+    name: z.string().max(2048),
+    fieldNames: z.array(z.string().max(2048)).min(1).max(32),
+  }),
+  z.object({
+    kind: z.literal('addConstraint'),
+    constraintKind: z.literal('check'),
+    name: z.string().max(2048),
+    expression: z.string().trim().min(1).max(4096),
+  }),
+]);
+
+export type AddConstraintOperation = z.infer<typeof addConstraintOperationSchema>;
+
+export const dropConstraintOperationSchema = z.object({
+  kind: z.literal('dropConstraint'),
+  name: z.string().max(2048),
+});
+
+export type DropConstraintOperation = z.infer<typeof dropConstraintOperationSchema>;
+
 export const schemaOperationSchema = z.discriminatedUnion('kind', [
   addNullableFieldOperationSchema,
   alterFieldOperationSchema,
+  addConstraintOperationSchema,
+  dropConstraintOperationSchema,
 ]);
 
 export type SchemaOperation = z.infer<typeof schemaOperationSchema>;
@@ -159,6 +191,7 @@ export const schemaFieldDraftRequestSchema = z.object({
     type: z.string().max(128),
     typeDetails: z.string().max(256),
     defaultValue: z.string().max(4096),
+    nullable: z.boolean().optional(),
   }),
 });
 

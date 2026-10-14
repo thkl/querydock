@@ -4,7 +4,7 @@
       <div class="placeholder-icon schema-placeholder-icon" aria-hidden="true">☷</div>
       <p class="eyebrow">TABLE STRUCTURE</p>
       <h1>Connect to inspect a table</h1>
-      <p>Connect to a PostgreSQL database to load its visible fields and constraints. This page is read only.</p>
+      <p>Connect to a PostgreSQL database to load its visible fields and constraints.</p>
       <button class="subtle-button" type="button" (click)="connections.openConnectDialog()">Add connection</button>
     </div>
   } @else if (loading()) {
@@ -43,17 +43,17 @@
             <p class="fields-instructions">Use <strong>Add row</strong> to add a nullable field, or edit a supported field’s name, type, size, or default. Drafts appear in the runbook for review.</p>
           }
         </div>
-        <span class="metadata-label">{{ uncommittedFieldCount() ? 'BASELINE + DRAFTS' : 'CURRENT STRUCTURE' }}</span>
+        <span class="metadata-label">{{ uncommittedSchemaChangeCount() ? 'BASELINE + DRAFTS' : 'CURRENT STRUCTURE' }}</span>
       </header>
-      @if (stageError()) {
-        <p class="stage-error" role="alert">{{ stageError() }}</p>
-      }
-      @if (stagingField()) {
-        <p class="stage-progress" role="status">Updating the runbook preview…</p>
-      }
-      @if (uncommittedFieldCount()) {
-        <p class="draft-caption"><span class="draft-marker"></span> Pending field changes are saved in the runbook and have not been applied.</p>
-      }
+      <div class="field-feedback-slot" aria-live="polite">
+        @if (stageError()) {
+          <p class="stage-error" role="alert">{{ stageError() }}</p>
+        } @else if (stagingField()) {
+          <p class="stage-progress" role="status">Updating the runbook preview…</p>
+        } @else if (uncommittedSchemaChangeCount()) {
+          <p class="draft-caption"><span class="draft-marker"></span> Pending schema changes are saved in the runbook and have not been applied.</p>
+        }
+      </div>
       <div class="schema-grid schema-grid--fields">
         <agrid [provider]="fieldGridProvider()"
           (prepareAddRecord)="prepareFieldDraft($event)"
@@ -70,12 +70,18 @@
       <header class="card-heading">
         <div>
           <h2 id="constraints-title">Constraints</h2>
-          <p>{{ table.constraints.length }} {{ table.constraints.length === 1 ? 'constraint' : 'constraints' }}</p>
+          <p>{{ visibleConstraintCount() }} {{ visibleConstraintCount() === 1 ? 'constraint' : 'constraints' }}</p>
+          @if (table.editableConstraintKinds.length) {
+            <p class="fields-instructions">Use <strong>Add row</strong> to stage a primary key, unique constraint, or CHECK constraint. Enter comma-separated fields for keys, or a CHECK expression such as <code>quantity &gt; 0</code>. The database adapter validates field references and expression syntax. Mark an editable constraint for removal with its checkbox.</p>
+          }
         </div>
-        <span class="metadata-label">CURRENT STRUCTURE</span>
+        <span class="metadata-label">{{ uncommittedSchemaChangeCount() ? 'BASELINE + DRAFTS' : 'CURRENT STRUCTURE' }}</span>
       </header>
       <div class="schema-grid schema-grid--constraints">
-        <agrid [provider]="constraintGridProvider" />
+        <agrid [provider]="constraintGridProvider()"
+          (prepareAddRecord)="prepareConstraintDraft($event)"
+          (cellEdit)="onConstraintCellEdit($event)"
+          (recordEdit)="onConstraintRecordEdit($event)" />
       </div>
     </section>
 

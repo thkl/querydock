@@ -65,17 +65,34 @@ h1 {
   letter-spacing: .08em;
 }
 
-.stage-error,
 .storage-warning {
   margin: 12px 16px;
-  color: var(--color-danger);
   font-size: .85em;
 }
 
+.field-feedback-slot {
+  display: flex;
+  align-items: center;
+  height: 2.5em;
+  margin: 12px 16px 0;
+  overflow-y: auto;
+  box-sizing: border-box;
+  font-size: .82em;
+  line-height: 1.25;
+}
+
+.stage-error,
+.stage-progress,
+.draft-caption {
+  margin: 0;
+}
+
+.stage-error {
+  color: var(--color-danger);
+}
+
 .stage-progress {
-  margin: 12px 16px;
   color: var(--color-accent);
-  font-size: .85em;
 }
 
 .storage-warning {
@@ -153,7 +170,7 @@ h1 {
 }
 
 .schema-grid--constraints {
-  max-height: 290px;
+  height: calc(100% - 8em);
 }
 
 .schema-grid agrid {
@@ -162,7 +179,7 @@ h1 {
 }
 
 .schema-grid--constraints agrid {
-  min-width: 920px;
+  min-width: 1320px;
   min-height: 118px;
 }
 
@@ -170,10 +187,7 @@ h1 {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 12px 16px 0;
   color: var(--color-muted);
-  font-size: .82em;
-  height: 2.5em;
 }
 
 .draft-marker {

@@ -91,8 +91,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/contracts
       '@thkl/agrid':
-        specifier: ^0.1.23
-        version: 0.1.23(67de5ab97ba491837155aa1f49b08886)
+        specifier: ^0.1.24
+        version: 0.1.24(67de5ab97ba491837155aa1f49b08886)
       codemirror:
         specifier: ^6.0.2
         version: 6.0.2
@@ -1333,8 +1333,8 @@ packages:
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
 
-  '@thkl/agrid@0.1.23':
-    resolution: {integrity: sha512-YPSaABj5spoMSDamiWpt4tUE013FnM8zVm+jEj7wkNyuEltwe1tETUUjxBTBaggGA0lKiKreQmldI8jBEPq8XA==}
+  '@thkl/agrid@0.1.24':
+    resolution: {integrity: sha512-xFHr8r4m0lxy92gdJBxHwuCykcTSFuhs1zOv4gbgtJZaMymDub0Z2QCN58I/g9BgsL/7cvcLAdjdRXuAfHgp1w==}
     peerDependencies:
       '@angular/cdk': '>=21.0.0 <23.0.0'
       '@angular/common': '>=21.0.0 <23.0.0'
@@ -3660,7 +3660,7 @@ snapshots:
 
   '@standard-schema/spec@1.1.0': {}
 
-  '@thkl/agrid@0.1.23(67de5ab97ba491837155aa1f49b08886)':
+  '@thkl/agrid@0.1.24(67de5ab97ba491837155aa1f49b08886)':
     dependencies:
       '@angular/cdk': 22.2.2(@angular/common@22.2.2(@angular/core@22.2.2(@angular/compiler@22.2.2)(rxjs@7.8.2)(zone.js@0.16.3))(rxjs@7.8.2))(@angular/core@22.2.2(@angular/compiler@22.2.2)(rxjs@7.8.2)(zone.js@0.16.3))(@angular/forms@22.2.2(@angular/common@22.2.2(@angular/core@22.2.2(@angular/compiler@22.2.2)(rxjs@7.8.2)(zone.js@0.16.3))(rxjs@7.8.2))(@angular/core@22.2.2(@angular/compiler@22.2.2)(rxjs@7.8.2)(zone.js@0.16.3))(@angular/platform-browser@22.2.2(@angular/common@22.2.2(@angular/core@22.2.2(@angular/compiler@22.2.2)(rxjs@7.8.2)(zone.js@0.16.3))(rxjs@7.8.2))(@angular/core@22.2.2(@angular/compiler@22.2.2)(rxjs@7.8.2)(zone.js@0.16.3)))(rxjs@7.8.2))(@angular/platform-browser@22.2.2(@angular/common@22.2.2(@angular/core@22.2.2(@angular/compiler@22.2.2)(rxjs@7.8.2)(zone.js@0.16.3))(rxjs@7.8.2))(@angular/core@22.2.2(@angular/compiler@22.2.2)(rxjs@7.8.2)(zone.js@0.16.3)))(rxjs@7.8.2)
       '@angular/common': 22.2.2(@angular/core@22.2.2(@angular/compiler@22.2.2)(rxjs@7.8.2)(zone.js@0.16.3))(rxjs@7.8.2)

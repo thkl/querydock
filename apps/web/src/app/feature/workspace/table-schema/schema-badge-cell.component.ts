@@ -8,7 +8,8 @@ import { AGRID_RENDERER_CONTEXT } from '@thkl/agrid';
   template: `
     @if (label()) {
       <span class="schema-grid-badge" [class.schema-grid-badge--draft]="draft()"
-        [class.schema-grid-badge--required]="required()">{{ label() }}</span>
+        [class.schema-grid-badge--required]="required()"
+        [class.schema-grid-badge--error]="invalid()">{{ label() }}</span>
     } @else {
       <span aria-hidden="true">—</span>
     }
@@ -37,6 +38,11 @@ import { AGRID_RENDERER_CONTEXT } from '@thkl/agrid';
       color: var(--color-draft);
     }
     .schema-grid-badge--required { color: var(--color-warning); }
+    .schema-grid-badge--error {
+      border-color: var(--color-danger);
+      background: var(--color-danger-bg);
+      color: var(--color-danger);
+    }
   `],
 })
 export class SchemaBadgeCellComponent {
@@ -49,4 +55,5 @@ export class SchemaBadgeCellComponent {
   });
   readonly draft = computed(() => this.label() === 'UNCOMMITTED');
   readonly required = computed(() => this.label() === 'NO');
+  readonly invalid = computed(() => this.label() === 'INVALID');
 }
