@@ -28,13 +28,8 @@ RUN HUSKY=0 pnpm install --prod --frozen-lockfile --filter '@querydock/server...
 
 COPY --from=build /workspace/apps/server/dist ./apps/server/dist
 COPY --from=build /workspace/packages/contracts/dist ./packages/contracts/dist
+COPY --from=build /workspace/apps/web/dist/web/browser ./apps/server/dist/client
 
 WORKDIR /workspace/apps/server
 EXPOSE 3000
 CMD ["node", "dist/main.js"]
-
-FROM nginx:alpine AS web
-
-COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
-COPY --from=build /workspace/apps/web/dist/web/browser /usr/share/nginx/html
-EXPOSE 80

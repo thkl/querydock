@@ -16,17 +16,20 @@ pnpm start:dev
 
 The Angular app runs on `http://localhost:4200`. The NestJS API runs on `http://localhost:3000`; its health endpoint is `http://localhost:3000/api/health`. The Angular dev server proxies `/api` requests to the API.
 
-## Docker Compose
+## Docker Compose and Traefik
 
-Build and start the production web and API containers:
+The production image contains one NestJS server process. It serves the built Angular app, falls back to `index.html` for client routes, and handles API requests under `/api`.
+
+Connect QueryDock to the same Docker network as Traefik, then build and start it:
 
 ```sh
-docker compose up --build -d
+docker network create traefik # only if the network does not already exist
+QUERYDOCK_HOST=querydock.example.com docker compose up --build -d
 ```
 
-Open `http://localhost:8080`. The web container serves the Angular app and proxies `/api` requests to the API container. The API health endpoint is available through `http://localhost:8080/api/health`. Set `QUERYDOCK_HTTP_PORT` to change the host port, for example `QUERYDOCK_HTTP_PORT=8090 docker compose up --build -d`.
+Compose attaches to the external `traefik` network and adds Docker-provider labels for the `websecure` entrypoint and `letsencrypt` certificate resolver. Set `TRAEFIK_DOCKER_NETWORK`, `TRAEFIK_ENTRYPOINT`, `TRAEFIK_CERT_RESOLVER`, or `TRAEFIK_TLS` to match your Traefik setup. The app also publishes port 8080 by default for direct access; set `QUERYDOCK_HTTP_PORT` to change it.
 
-Compose does not start a database; QueryDock connects to databases you choose in the app. For a database running on the host, use `host.docker.internal` as its host from the containerized app. Stop the containers with `docker compose down`.
+Compose does not start a database; QueryDock connects to databases selected in the app. For a database running on the Docker host, use `host.docker.internal` as its host from the container. Stop QueryDock with `docker compose down`.
 
 ## Commit hooks
 
