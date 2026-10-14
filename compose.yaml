@@ -11,16 +11,6 @@ services:
       PORT: 3000
     ports:
       - "${QUERYDOCK_HTTP_PORT:-8080}:3000"
-    labels:
-      traefik.enable: "true"
-      traefik.docker.network: "${TRAEFIK_DOCKER_NETWORK:-traefik}"
-      traefik.http.routers.querydock.rule: "Host(`${QUERYDOCK_HOST:-querydock.localhost}`)"
-      traefik.http.routers.querydock.entrypoints: "${TRAEFIK_ENTRYPOINT:-websecure}"
-      traefik.http.routers.querydock.tls: "${TRAEFIK_TLS:-true}"
-      traefik.http.routers.querydock.tls.certresolver: "${TRAEFIK_CERT_RESOLVER:-letsencrypt}"
-      traefik.http.services.querydock.loadbalancer.server.port: "3000"
-    networks:
-      - proxy
     restart: unless-stopped
     healthcheck:
       test:
@@ -32,8 +22,3 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-
-networks:
-  proxy:
-    name: "${TRAEFIK_DOCKER_NETWORK:-traefik}"
-    external: true
