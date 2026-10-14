@@ -72,17 +72,75 @@
           <h2 id="constraints-title">Constraints</h2>
           <p>{{ visibleConstraintCount() }} {{ visibleConstraintCount() === 1 ? 'constraint' : 'constraints' }}</p>
           @if (table.editableConstraintKinds.length) {
-            <p class="fields-instructions">Use <strong>Add row</strong> to stage a primary key, unique constraint, or CHECK constraint. Enter comma-separated fields for keys, or a CHECK expression such as <code>quantity &gt; 0</code>. The database adapter validates field references and expression syntax. Delete an editable constraint row to stage its removal; delete a <strong>DROP PENDING</strong> row again to cancel that drop.</p>
+            <p class="fields-instructions">Use <strong>Add row</strong> to stage a primary key, unique, foreign key, or CHECK constraint. For foreign keys, open the Reference cell to choose a table and compatible key fields. Delete an editable constraint row to stage its removal; delete a <strong>DROP PENDING</strong> row again to cancel that drop.</p>
           }
         </div>
         <span class="metadata-label">{{ uncommittedSchemaChangeCount() ? 'BASELINE + DRAFTS' : 'CURRENT STRUCTURE' }}</span>
       </header>
-      <div class="schema-grid schema-grid--constraints">
-        <agrid [provider]="constraintGridProvider()"
-          (prepareAddRecord)="prepareConstraintDraft($event)"
-          (cellEdit)="onConstraintCellEdit($event)"
-          (recordEdit)="onConstraintRecordEdit($event)"
-          (rowRemoved)="onConstraintRowRemoved($event)" />
+      <div class="constraints-editor-layout">
+        <div class="schema-grid schema-grid--constraints">
+          <agrid [provider]="constraintGridProvider()"
+            (prepareAddRecord)="prepareConstraintDraft($event)"
+            (cellEdit)="onConstraintCellEdit($event)"
+            (recordEdit)="onConstraintRecordEdit($event)"
+            (rowRemoved)="onConstraintRowRemoved($event)" />
+        </div>
+        @if (foreignKeyEditor.row(); as editingForeignKey) {
+          <aside class="foreign-key-editor" aria-labelledby="foreign-key-editor-title">
+            <header class="foreign-key-editor__header">
+              <div>
+                <p class="eyebrow">FOREIGN KEY</p>
+                <h3 id="foreign-key-editor-title">Choose a reference</h3>
+              </div>
+              <button class="editor-close" type="button" aria-label="Close reference editor" (click)="foreignKeyEditor.close()">×</button>
+            </header>
+            <label class="editor-label" for="foreign-key-name">Constraint name</label>
+            <input id="foreign-key-name" class="editor-input" [value]="foreignKeyEditorName()"
+              (input)="foreignKeyEditorName.set($any($event.target).value)" />
+            @if (editingForeignKey.sourceName) {
+              <p class="editor-hint">Saving replaces the current constraint in the runbook.</p>
+            }
+            <label class="editor-label" for="foreign-key-target">Target table</label>
+            <select id="foreign-key-target" class="editor-input"
+              (change)="onForeignKeyTargetChanged($event)">
+              <option value="" [selected]="!foreignKeyTargetSchema() || !foreignKeyTargetTable()">Select a table…</option>
+              @for (target of foreignKeyTargets(); track target.schema + '.' + target.name) {
+                <option [value]="target.schema + '\u0000' + target.name"
+                  [selected]="target.schema === foreignKeyTargetSchema() && target.name === foreignKeyTargetTable()">
+                  {{ target.schema }}.{{ target.name }}
+                </option>
+              }
+            </select>
+            <fieldset class="editor-fieldset">
+              <legend class="editor-label">Local fields</legend>
+              @for (field of snapshot()?.fields ?? []; track field.name) {
+                <label class="editor-check">
+                  <input type="checkbox" [checked]="foreignKeyLocalFields().includes(field.name)"
+                    (change)="onForeignKeyLocalFieldChanged(field.name, $event)" />
+                  <span>{{ foreignKeyLocalFields().includes(field.name) ? (foreignKeyLocalFields().indexOf(field.name) + 1) + '. ' : '' }}{{ field.name }}</span><small>{{ field.dataType }}</small>
+                </label>
+              }
+            </fieldset>
+            @if (foreignKeyEditorLoading()) {
+              <p class="editor-hint" role="status">Checking compatible target keys…</p>
+            } @else if (foreignKeyTargetSets().length) {
+              <label class="editor-label" for="foreign-key-fields">Referenced key</label>
+              <select id="foreign-key-fields" class="editor-input" [value]="foreignKeySelectedSet()"
+                (change)="foreignKeySelectedSet.set($any($event.target).value)">
+                @for (fieldSet of foreignKeyTargetSets(); track fieldSet.fieldNames.join(',')) {
+                  <option [value]="fieldSet.fieldNames.join('\u0000')">{{ fieldSet.label }}</option>
+                }
+              </select>
+              <p class="editor-hint">Only primary and unique keys with adapter-approved field types are listed.</p>
+            }
+            @if (foreignKeyEditorError()) { <p class="editor-error" role="alert">{{ foreignKeyEditorError() }}</p> }
+            <footer class="editor-actions">
+              <button class="editor-cancel" type="button" (click)="foreignKeyEditor.close()">Cancel</button>
+              <button class="editor-save" type="button" [disabled]="foreignKeyEditorLoading() || !foreignKeySelectedSet() || !foreignKeyEditorName().trim()"
+                (click)="saveForeignKeyReference()">Save to runbook</button>
+            </footer>
+          </aside>
+        }
       </div>
     </section>
 

@@ -7,6 +7,8 @@ import type {
   SchemaFieldDraftRequest,
   SchemaFieldDraftResponse,
   ConnectResponse,
+  EditableFieldTypeDescriptor,
+  ForeignKeyFieldChoices,
   PostgresConnectRequest,
   ResourceDescriptor,
   TableSnapshot,
@@ -96,6 +98,28 @@ export class ConnectionApiService {
     );
   }
 
+  async editableFieldTypes(connectionId: string): Promise<EditableFieldTypeDescriptor[]> {
+    return request<EditableFieldTypeDescriptor[]>(
+      `/api/connections/${encodeURIComponent(connectionId)}/schema/field-types`,
+    );
+  }
+
+  foreignKeyFieldChoices(
+    connectionId: string,
+    schema: string,
+    table: string,
+    targetSchema: string,
+    targetTable: string,
+    localFieldNames: string[],
+  ): Promise<ForeignKeyFieldChoices> {
+    const path = [connectionId, 'tables', schema, table, 'foreign-key-targets', targetSchema, targetTable, 'fields']
+      .map(encodeURIComponent).join('/');
+    return request<ForeignKeyFieldChoices>(`/api/connections/${path}`, {
+      method: 'POST',
+      body: JSON.stringify({ localFieldNames }),
+    });
+  }
+
   previewMigration(connectionId: string, plan: MigrationPreviewRequest): Promise<MigrationPreviewResponse> {
     return request<unknown>(`/api/connections/${encodeURIComponent(connectionId)}/migrations/preview`, {
       method: 'POST',
@@ -155,6 +179,10 @@ export class ConnectionApiService {
     });
   }
 
+  refreshResources(connectionId: string): Promise<void> {
+    return this.loadResources(connectionId);
+  }
+
   private setResourceError(connectionId: string, message: string): void {
     this.resourceErrorsByConnection.update((current) => {
       const next = new Map(current);
@@ -196,7 +224,7 @@ async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
 
 function parseMigrationPreview(payload: unknown): MigrationPreviewResponse {
   if (isRecord(payload)
-    && typeof payload['baselineFingerprint'] === 'string'
+    && (typeof payload['baselineFingerprint'] === 'string' || payload['baselineFingerprint'] === null)
     && Array.isArray(payload['statements']) && payload['statements'].every((statement) => typeof statement === 'string')
     && Array.isArray(payload['warnings']) && payload['warnings'].every((warning) => typeof warning === 'string')) {
     return payload as unknown as MigrationPreviewResponse;
@@ -205,17 +233,17 @@ function parseMigrationPreview(payload: unknown): MigrationPreviewResponse {
 }
 
 function parseMigrationApply(payload: unknown): MigrationApplyResponse {
-  const snapshot = isRecord(payload) ? payload['snapshot'] : undefined;
+  const snapshots = isRecord(payload) ? payload['snapshots'] : undefined;
   if (isRecord(payload)
     && Array.isArray(payload['appliedStatements']) && payload['appliedStatements'].every((statement) => typeof statement === 'string')
-    && isRecord(snapshot)
-    && typeof snapshot['schema'] === 'string'
-    && typeof snapshot['name'] === 'string'
-    && typeof snapshot['kind'] === 'string'
-    && typeof snapshot['canAlter'] === 'boolean'
-    && typeof snapshot['fingerprint'] === 'string'
-    && Array.isArray(snapshot['fields'])
-    && Array.isArray(snapshot['constraints'])) {
+    && Array.isArray(snapshots) && snapshots.length > 0 && snapshots.every((snapshot) => isRecord(snapshot)
+      && typeof snapshot['schema'] === 'string'
+      && typeof snapshot['name'] === 'string'
+      && typeof snapshot['kind'] === 'string'
+      && typeof snapshot['canAlter'] === 'boolean'
+      && typeof snapshot['fingerprint'] === 'string'
+      && Array.isArray(snapshot['fields'])
+      && Array.isArray(snapshot['constraints']))) {
     return payload as unknown as MigrationApplyResponse;
   }
   throw new Error('The server did not return a valid confirmation for the migration.');

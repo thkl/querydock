@@ -29,7 +29,10 @@
         <p class="empty-resources resource-error" role="alert">Resource discovery failed: {{ resourceError }}</p>
       }
       @for (group of connections.resourceGroups(); track group.schema) {
-        <div class="tree-row schema-row" [title]="group.schema"><span class="tree-caret">⌄</span><span class="schema-icon">▱</span><span>{{ group.schema }}</span></div>
+        <div class="tree-row schema-row" [title]="group.schema">
+          <span class="tree-caret">⌄</span><span class="schema-icon">▱</span><span>{{ group.schema }}</span>
+          <button class="schema-add-table" type="button" [attr.aria-label]="'Create table in ' + group.schema" [title]="'Create table in ' + group.schema" (click)="pages.openCreateTable(group.schema)">＋</button>
+        </div>
         @for (resource of group.resources; track resource.schema + '.' + resource.name) {
           <button
             class="tree-row table-row"

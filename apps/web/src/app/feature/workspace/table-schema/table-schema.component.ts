@@ -25,6 +25,8 @@ import { ConnectionApiService } from '../connections/connection-api.service';
 import { RunbookService } from '../runbook/runbook.service';
 import { WorkspacePagesService } from '../workspace-pages.service';
 import { SchemaBadgeCellComponent } from './schema-badge-cell.component';
+import { ForeignKeyEditorState, type ForeignKeyEditorRow } from './foreign-key-editor-state';
+import { ForeignKeyReferenceCellComponent } from './foreign-key-reference-cell.component';
 
 interface SchemaFieldRow {
   sourceName: string | null;
@@ -64,6 +66,7 @@ interface SchemaConstraintRow {
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [AgridComponent, RouterLink],
+  providers: [ForeignKeyEditorState],
   templateUrl: './table-schema.component.html',
   styleUrl: './table-schema.component.css',
 })
@@ -72,6 +75,7 @@ export class TableSchemaComponent {
   private requestVersion = 0;
 
   readonly connections = inject(ConnectionApiService);
+  readonly foreignKeyEditor = inject(ForeignKeyEditorState);
   readonly runbook = inject(RunbookService);
   private readonly workspacePages = inject(WorkspacePagesService);
   readonly routeState = toSignal(
@@ -180,6 +184,17 @@ export class TableSchemaComponent {
   readonly stageError = signal<string | null>(null);
   readonly fieldTypeOptions = computed(() => (this.snapshot()?.editableFieldTypes ?? [])
     .map(({ value, label }) => ({ value, label })));
+  readonly foreignKeyTargets = computed(() => this.connections.activeResources()
+    .filter(({ kind }) => kind === 'table' || kind === 'partitionedTable'));
+  readonly foreignKeyLocalFields = signal<string[]>([]);
+  readonly foreignKeyTargetSchema = signal('');
+  readonly foreignKeyTargetTable = signal('');
+  readonly foreignKeyTargetSets = signal<{ fieldNames: string[]; label: string }[]>([]);
+  readonly foreignKeySelectedSet = signal('');
+  readonly foreignKeyEditorName = signal('');
+  readonly foreignKeyEditorLoading = signal(false);
+  readonly foreignKeyEditorError = signal<string | null>(null);
+  private initializedForeignKeyRow: ForeignKeyEditorRow | null = null;
 
   constructor() {
     const columns = this.makeFieldColumns();
@@ -256,6 +271,15 @@ export class TableSchemaComponent {
     effect(() => this.constraintDatasource.setData(this.displayConstraints()));
     effect(() => this.editableConstraintGridProvider.columns.set(this.makeConstraintColumns()));
     effect(() => {
+      const row = this.foreignKeyEditor.row();
+      if (row && row !== this.initializedForeignKeyRow) {
+        this.initializedForeignKeyRow = row;
+        this.initializeForeignKeyEditor(row);
+      } else if (!row) {
+        this.initializedForeignKeyRow = null;
+      }
+    });
+    effect(() => {
       const [params, query] = this.routeState();
       const connection = this.connections.activeConnection();
       const table = params.get('tableName');
@@ -320,7 +344,7 @@ export class TableSchemaComponent {
       name: '',
       fields: '',
       definition: '',
-      references: '—',
+      references: '',
       canDrop: false,
       drop: false,
       status: 'FILL NAME + FIELDS / EXPRESSION',
@@ -361,7 +385,8 @@ export class TableSchemaComponent {
     this.stageError.set(null);
     if (row.isGridInput || (row.sourceName === null && row.isUncommitted)) {
       this.constraintDatasource.patchRow(event.position.rowIndex, {
-        status: row.name.trim() && row.fields.trim() ? 'READY TO STAGE' : 'FILL NAME + DEFINITION',
+        status: row.name.trim() && row.fields.trim()
+          && (row.kind !== 'foreignKey' || row.references.trim()) ? 'READY TO STAGE' : 'FILL REQUIRED FIELDS',
       });
     }
   }
@@ -369,7 +394,9 @@ export class TableSchemaComponent {
   onConstraintRecordEdit(event: RecordEditEvent<SchemaConstraintRow>): void {
     const row = event.data;
     if (row.isGridInput) {
-      if (row.name.trim() && row.fields.trim()) void this.stageConstraint(row);
+      if (row.name.trim() && row.fields.trim() && (row.kind !== 'foreignKey' || row.references.trim())) {
+        void this.stageConstraint(row);
+      }
       return;
     }
     if (row.isUncommitted || row.drop !== this.isConstraintDropped(row.sourceName)) {
@@ -379,6 +406,7 @@ export class TableSchemaComponent {
 
   onConstraintRowRemoved(event: RecordEditEvent<SchemaConstraintRow>): void {
     const row = event.data;
+    this.closeForeignKeyEditorFor(row);
     if (row.isGridInput) return;
 
     if (row.sourceName !== null && !row.canDrop) {
@@ -407,6 +435,16 @@ export class TableSchemaComponent {
       .finally(() => this.constraintDatasource.setData(this.displayConstraints()));
   }
 
+  private closeForeignKeyEditorFor(row: SchemaConstraintRow): void {
+    const editing = this.foreignKeyEditor.row();
+    if (!editing) return;
+    const matches = row.sourceName !== null
+      ? editing.sourceName === row.sourceName
+      : editing.sourceName === null
+        && (editing.operationName ?? editing.name) === (row.operationName ?? row.name);
+    if (matches) this.foreignKeyEditor.close();
+  }
+
   private async stageConstraint(row: SchemaConstraintRow): Promise<void> {
     const connection = this.connections.activeConnection();
     const snapshot = this.snapshot();
@@ -415,10 +453,12 @@ export class TableSchemaComponent {
     const replacementName = row.sourceName ?? row.operationName ?? row.name.trim();
 
     if (row.isGridInput) {
-      if (!row.name.trim() || !row.fields.trim()) {
+      if (!row.name.trim() || !row.fields.trim() || (row.kind === 'foreignKey' && !row.references.trim())) {
         this.stageError.set(row.kind === 'check'
           ? 'Enter a constraint name and a CHECK expression, such as quantity > 0.'
-          : 'Enter a constraint name and at least one field. Separate multiple fields with commas.');
+          : row.kind === 'foreignKey'
+            ? 'Enter the constraint name, local fields, and a target such as public.users(id).'
+            : 'Enter a constraint name and at least one field. Separate multiple fields with commas.');
         return;
       }
       if (!snapshot.editableConstraintKinds.some(({ value }) => value === row.kind)) {
@@ -444,12 +484,22 @@ export class TableSchemaComponent {
           this.stageError.set('Enter at least one field for this constraint.');
           return;
         }
-        operation = {
-          kind: 'addConstraint',
-          constraintKind: row.kind as Exclude<EditableConstraintKind, 'check'>,
-          name: row.name.trim(),
-          fieldNames,
-        };
+        if (row.kind === 'foreignKey') {
+          try {
+            operation = { kind: 'addConstraint', constraintKind: 'foreignKey', name: row.name.trim(), fieldNames,
+              ...parseForeignKeyReference(row.references) };
+          } catch (error) {
+            this.stageError.set(error instanceof Error ? error.message : 'Enter a target such as public.users(id).');
+            return;
+          }
+        } else {
+          operation = {
+            kind: 'addConstraint',
+            constraintKind: row.kind as Exclude<EditableConstraintKind, 'check' | 'foreignKey'>,
+            name: row.name.trim(),
+            fieldNames,
+          };
+        }
       }
     } else if (row.sourceName !== null && row.drop) {
       operation = { kind: 'dropConstraint', name: row.sourceName };
@@ -538,9 +588,103 @@ export class TableSchemaComponent {
       { field: 'name', header: 'Name', width: 220, editable: true, cellReadonly: ({ row }: CellReadonlyParams<SchemaConstraintRow>) => row.sourceName !== null },
       { field: 'fields', header: 'Fields / CHECK expression', width: 290, editable: true, cellReadonly: ({ row }: CellReadonlyParams<SchemaConstraintRow>) => row.sourceName !== null },
       { field: 'definition', header: 'Definition', width: 300, editable: false, locked: true },
-      { field: 'references', header: 'References', width: 200, editable: false, locked: true },
+      {
+        field: 'references', header: 'Reference', width: 290, editable: false,
+        cellRendererComponent: ForeignKeyReferenceCellComponent,
+      },
       { field: 'status', header: 'Status', width: 150, cellRendererComponent: SchemaBadgeCellComponent, editable: false, locked: true },
     ];
+  }
+
+  async onForeignKeyTargetChanged(event: Event): Promise<void> {
+    const target = (event.target as HTMLSelectElement).value;
+    const [schema = '', table = ''] = target.split('\u0000');
+    this.foreignKeyTargetSchema.set(schema);
+    this.foreignKeyTargetTable.set(table);
+    await this.loadForeignKeyTargetSets();
+  }
+
+  async onForeignKeyLocalFieldChanged(field: string, event: Event): Promise<void> {
+    const checked = (event.target as HTMLInputElement).checked;
+    const fields = this.foreignKeyLocalFields();
+    this.foreignKeyLocalFields.set(checked ? [...fields, field] : fields.filter((value) => value !== field));
+    await this.loadForeignKeyTargetSets();
+  }
+
+  async loadForeignKeyTargetSets(): Promise<void> {
+    const row = this.foreignKeyEditor.row();
+    const connection = this.connections.activeConnection();
+    const snapshot = this.snapshot();
+    const localFieldNames = this.foreignKeyLocalFields();
+    const targetSchema = this.foreignKeyTargetSchema();
+    const targetTable = this.foreignKeyTargetTable();
+    this.foreignKeyTargetSets.set([]);
+    this.foreignKeySelectedSet.set('');
+    this.foreignKeyEditorError.set(null);
+    if (!row || !connection || !snapshot || !localFieldNames.length || !targetSchema || !targetTable) return;
+    this.foreignKeyEditorLoading.set(true);
+    try {
+      const result = await this.connections.foreignKeyFieldChoices(
+        connection.connectionId, snapshot.schema, snapshot.name, targetSchema, targetTable, localFieldNames,
+      );
+      this.foreignKeyTargetSets.set(result.fieldSets);
+      this.foreignKeySelectedSet.set(result.fieldSets[0]?.fieldNames.join('\u0000') ?? '');
+      if (!result.fieldSets.length) this.foreignKeyEditorError.set('This table has no primary or unique key with fields compatible with the selected local fields.');
+    } catch (error) {
+      this.foreignKeyEditorError.set(error instanceof Error ? error.message : 'Unable to load compatible referenced fields.');
+    } finally {
+      this.foreignKeyEditorLoading.set(false);
+    }
+  }
+
+  private initializeForeignKeyEditor(row: ForeignKeyEditorRow): void {
+    this.foreignKeyEditorError.set(null);
+    this.foreignKeyEditorName.set(row.name);
+    const parsedLocal = row.fields === '—' ? [] : safeParseFieldNames(row.fields);
+    this.foreignKeyLocalFields.set(parsedLocal);
+    const parsedReference = row.references === '—' ? null : safeParseForeignKeyReference(row.references);
+    const targetSchema = parsedReference?.referencedSchema ?? '';
+    const targetTable = parsedReference?.referencedTable ?? '';
+    this.foreignKeyTargetSchema.set(targetSchema);
+    this.foreignKeyTargetTable.set(targetTable);
+    if (targetSchema && targetTable) void this.loadForeignKeyTargetSets().then(() => {
+      const current = parsedReference?.referencedFieldNames.join('\u0000');
+      if (current && this.foreignKeyTargetSets().some(({ fieldNames }) => fieldNames.join('\u0000') === current)) {
+        this.foreignKeySelectedSet.set(current);
+      }
+    });
+  }
+
+  async saveForeignKeyReference(): Promise<void> {
+    const row = this.foreignKeyEditor.row();
+    const connection = this.connections.activeConnection();
+    const snapshot = this.snapshot();
+    const selected = this.foreignKeySelectedSet();
+    const referencedFieldNames = this.foreignKeyTargetSets().find(({ fieldNames }) => fieldNames.join('\u0000') === selected)?.fieldNames;
+    if (!row || !connection || !snapshot || !this.foreignKeyLocalFields().length || !referencedFieldNames) return;
+    const name = this.foreignKeyEditorName().trim();
+    const operation = {
+      kind: 'addConstraint' as const,
+      constraintKind: 'foreignKey' as const,
+      name,
+      fieldNames: this.foreignKeyLocalFields(),
+      referencedSchema: this.foreignKeyTargetSchema(),
+      referencedTable: this.foreignKeyTargetTable(),
+      referencedFieldNames,
+    };
+    this.stagingField.set(true);
+    this.foreignKeyEditorError.set(null);
+    try {
+      const replacements = row.sourceName
+        ? [{ kind: 'dropConstraint' as const, name: row.sourceName }, operation]
+        : [operation];
+      await this.runbook.stageSchemaOperations(connection, snapshot, replacements, [row.sourceName ?? name]);
+      this.foreignKeyEditor.close();
+    } catch (error) {
+      this.foreignKeyEditorError.set(error instanceof Error ? error.message : 'Unable to stage this foreign key.');
+    } finally {
+      this.stagingField.set(false);
+    }
   }
 
   private typeIdentity(snapshot: TableSnapshot, type: string): string {
@@ -589,8 +733,12 @@ export class TableSchemaComponent {
           fields: operation.constraintKind === 'check' ? operation.expression : formatFieldNames(operation.fieldNames),
           definition: operation.constraintKind === 'check'
             ? `CHECK (${operation.expression})`
-            : `${operation.constraintKind === 'primaryKey' ? 'PRIMARY KEY' : 'UNIQUE'} (${formatFieldNames(operation.fieldNames)})`,
-          references: '—',
+            : operation.constraintKind === 'foreignKey'
+              ? `FOREIGN KEY (${formatFieldNames(operation.fieldNames)})`
+              : `${operation.constraintKind === 'primaryKey' ? 'PRIMARY KEY' : 'UNIQUE'} (${formatFieldNames(operation.fieldNames)})`,
+          references: operation.constraintKind === 'foreignKey'
+            ? `${operation.referencedSchema}.${operation.referencedTable} (${formatFieldNames(operation.referencedFieldNames)})`
+            : '—',
           canDrop: true,
           drop: false,
           status: 'UNCOMMITTED',
@@ -656,6 +804,47 @@ function parseFieldNames(value: string): string[] {
   if (quoted) throw new Error('Close the quoted field name before staging this constraint.');
   if (current.trim()) names.push(current.trim());
   return names;
+}
+
+function safeParseFieldNames(value: string): string[] {
+  try { return parseFieldNames(value); } catch { return []; }
+}
+
+function parseForeignKeyReference(value: string): {
+  referencedSchema: string;
+  referencedTable: string;
+  referencedFieldNames: string[];
+} {
+  const open = value.lastIndexOf('(');
+  if (open < 1 || !value.trimEnd().endsWith(')')) {
+    throw new Error('Use a schema-qualified target such as public.users(id).');
+  }
+  const target = value.slice(0, open).trim();
+  let quoted = false;
+  let separator = -1;
+  for (let index = 0; index < target.length; index += 1) {
+    if (target[index] === '"') {
+      if (quoted && target[index + 1] === '"') index += 1;
+      else quoted = !quoted;
+    } else if (target[index] === '.' && !quoted) {
+      if (separator >= 0) throw new Error('Use one schema and one table in the foreign key target.');
+      separator = index;
+    }
+  }
+  if (quoted || separator < 1 || separator === target.length - 1) {
+    throw new Error('Use a schema-qualified target such as public.users(id).');
+  }
+  const schemaParts = parseFieldNames(target.slice(0, separator));
+  const tableParts = parseFieldNames(target.slice(separator + 1));
+  const referencedFieldNames = parseFieldNames(value.slice(open + 1, -1));
+  if (schemaParts.length !== 1 || tableParts.length !== 1 || !referencedFieldNames.length) {
+    throw new Error('Enter a schema, table, and at least one referenced field.');
+  }
+  return { referencedSchema: schemaParts[0], referencedTable: tableParts[0], referencedFieldNames };
+}
+
+function safeParseForeignKeyReference(value: string): ReturnType<typeof parseForeignKeyReference> | null {
+  try { return parseForeignKeyReference(value); } catch { return null; }
 }
 
 function formatFieldNames(names: string[]): string {

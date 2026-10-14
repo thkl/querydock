@@ -129,14 +129,16 @@ The initial Apply contract uses deterministic server-side revalidation rather th
 ### Current implementation slice
 
 - Existing editable fields stage name, type/parameters, default, and nullability changes through adapter-generated previews.
+- New tables can be staged with adapter-provided field types, type parameters, nullability, defaults, and supported identity options. Preview and Apply confirm the schema and table name are available; Apply serializes concurrent QueryDock creates with a transaction-scoped advisory lock.
 - The identity control is populated from adapter capabilities and supports adding, changing, or removing `GENERATED ALWAYS` / `BY DEFAULT` on smallint, integer, and bigint fields. Identity changes include nullability/default checks and explicit warnings for populated tables.
-- The constraint grid can add and remove primary-key, unique, and CHECK constraints. The PostgreSQL adapter supplies the capability list, validates field and expression references, generates SQL, and warns about integrity changes. Foreign-key and exclusion constraints remain read only.
-- Table create/rename/drop, foreign-key constraints, dependency ordering across tables, and the selected-operation integration matrix remain to be implemented.
+- The constraint grid can add and remove primary-key, unique, foreign-key, and CHECK constraints. Foreign-key previews validate the target table, fields, and primary/unique key; Apply repeats those checks, generates SQL on the server, and reports existing-row validation risk. Exclusion constraints remain read only.
+- Table rename/drop, dependency ordering across tables, and the selected-operation integration matrix remain to be implemented. Standalone index editing remains a scope decision.
 
-## 7. Milestone E — Data browsing and batch editing
+## 7. Milestone E — Relationship diagram, data browsing, and batch editing
 
 ### Deliverables
 
+- Database relationship diagram showing tables and their foreign-key relationships. Users can create, edit, and remove relationships from the diagram; edits remain adapter-validated runbook operations.
 - Bounded browsing, server-side filtering/sorting/paging, and refresh.
 - Insert/update/delete drafts with Save and Discard.
 - Safe key-based row identification and concurrency checks.
@@ -145,6 +147,8 @@ The initial Apply contract uses deterministic server-side revalidation rather th
 
 ### Acceptance criteria
 
+- The diagram reflects the connected database's tables and foreign keys, identifies the fields at both ends of each relationship, and makes pending relation edits clear.
+- Creating, changing, or removing a relationship produces a reviewable runbook preview and applies through the database adapter.
 - Editing cells makes no mutation requests until explicit submission.
 - Ordinary Save applies one validated transactional batch, outside runbook history.
 - Add to runbook generates SQL and stages it without modifying the database.

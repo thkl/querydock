@@ -142,6 +142,16 @@
     white-space: nowrap;
 }
 
+.tab-action-error {
+    align-self: center;
+    max-width: 320px;
+    overflow: hidden;
+    color: var(--color-danger);
+    font-size: .8em;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .lock-icon {
     color: var(--color-accent);
     font-size: 1em;

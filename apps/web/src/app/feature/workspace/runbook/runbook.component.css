@@ -114,6 +114,12 @@ h1 {
   font-size: .9em;
 }
 
+.runbook-tables {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .runbook-target > span,
 .runbook-target code {
   color: var(--color-muted);
@@ -121,6 +127,10 @@ h1 {
 
 .runbook-target code {
   margin-left: auto;
+}
+
+.runbook-target .runbook-tables code {
+  margin-left: 0;
 }
 
 .applied-card {

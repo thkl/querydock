@@ -20,7 +20,18 @@
     <div class="runbook-target">
       <span>Target</span>
       <strong>{{ state.target.database }}</strong>
-      <code>{{ state.target.host }}:{{ state.target.port }} · {{ state.schema }}.{{ state.table }}</code>
+      <code>{{ state.target.host }}:{{ state.target.port }} · {{ state.schema }}</code>
+      @if (state.baseline) {
+        <code>{{ state.schema }}.{{ state.table }}</code>
+      } @else {
+        <div class="runbook-tables" aria-label="Tables in this runbook">
+          @for (operation of state.operations; track operation.kind === 'createTable' ? operation.table : $index) {
+            @if (operation.kind === 'createTable') {
+              <code>{{ state.schema }}.{{ operation.table }}{{ operation.ifNotExists ? ' · if missing' : '' }}</code>
+            }
+          }
+        </div>
+      }
     </div>
 
     @if (state.applyOutcomeUnknown) {
@@ -62,12 +73,14 @@
       }
       <footer class="preview-status">
         <span>{{ state.preview?.statements?.length ?? 0 }} pending statements</span>
-        <span>Baseline {{ state.baseline.fingerprint.slice(0, 12) }} · not executed</span>
+        <span>{{ state.baseline ? 'Baseline ' + state.baseline.fingerprint.slice(0, 12) : (state.operations.length > 1 ? 'New tables' : 'New table') }} · not executed</span>
       </footer>
     </section>
 
     <div class="runbook-actions">
-      <a class="subtle-button" [routerLink]="['/tables', state.table, 'schema']" [queryParams]="{ schema: state.schema }">Back to table</a>
+      @if (state.baseline) {
+        <a class="subtle-button" [routerLink]="['/tables', state.table, 'schema']" [queryParams]="{ schema: state.schema }">Back to table</a>
+      }
       <div class="runbook-action-group">
         @if (state.operations.length) {
           <button class="subtle-button" type="button" [disabled]="runbook.applying() || state.applyOutcomeUnknown" (click)="discard()">Discard pending</button>

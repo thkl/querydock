@@ -19,6 +19,7 @@ import type { Request, Response } from 'express';
 import {
   migrationApplyRequestSchema,
   migrationPreviewRequestSchema,
+  foreignKeyFieldChoicesRequestSchema,
   schemaFieldDraftRequestSchema,
   postgresConnectRequestSchema,
   type ConnectResponse,
@@ -67,6 +68,7 @@ export class ConnectionsController {
       },
       serverVersion: verified.serverVersion,
       capabilities: postgresCapabilities,
+      schemaCapabilities: this.postgres.schemaCapabilities(),
     });
   }
 
@@ -92,6 +94,16 @@ export class ConnectionsController {
     }
   }
 
+  @Get(':connectionId/schema/field-types')
+  editableFieldTypes(
+    @Param('connectionId') connectionId: string,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    this.sessions.requireConnection(request, response, connectionId);
+    return this.postgres.editableFieldTypes();
+  }
+
   @Get(':connectionId/tables')
   async inspectTable(
     @Param('connectionId') connectionId: string,
@@ -111,6 +123,30 @@ export class ConnectionsController {
       return snapshot;
     } catch (error) {
       if (error instanceof NotFoundException) throw error;
+      if (error instanceof MigrationPlanError) throw this.asMigrationException(error);
+      throw this.asSafeDatabaseException(error);
+    }
+  }
+
+  @Post(':connectionId/tables/:schema/:table/foreign-key-targets/:targetSchema/:targetTable/fields')
+  async foreignKeyFieldChoices(
+    @Param('connectionId') connectionId: string,
+    @Param('schema') schema: string,
+    @Param('table') table: string,
+    @Param('targetSchema') targetSchema: string,
+    @Param('targetTable') targetTable: string,
+    @Body() body: unknown,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const parsed = foreignKeyFieldChoicesRequestSchema.safeParse(body);
+    if (!parsed.success) throw new BadRequestException('Choose one or more local fields for the foreign key.');
+    const configuration = this.sessions.requireConnection(request, response, connectionId);
+    try {
+      return await this.postgres.foreignKeyFieldChoices(
+        configuration, schema, table, targetSchema, targetTable, parsed.data.localFieldNames,
+      );
+    } catch (error) {
       if (error instanceof MigrationPlanError) throw this.asMigrationException(error);
       throw this.asSafeDatabaseException(error);
     }

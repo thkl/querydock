@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { Client } from 'pg';
 import type {
+  CreateTableField,
   MigrationApplyRequest,
   MigrationApplyResponse,
   MigrationPreviewRequest,
@@ -12,6 +13,7 @@ import type {
   NullableFieldType,
   PostgresConnectRequest,
   ResourceDescriptor,
+  SchemaCapabilities,
   TableConstraintDescriptor,
   TableFieldDescriptor,
   TableSnapshot,
@@ -67,6 +69,7 @@ const POSTGRES_EDITABLE_IDENTITY_GENERATIONS = [
 const POSTGRES_EDITABLE_CONSTRAINT_KINDS: { value: EditableConstraintKind; label: string }[] = [
   { value: 'primaryKey', label: 'Primary key' },
   { value: 'unique', label: 'Unique' },
+  { value: 'foreignKey', label: 'Foreign key' },
   { value: 'check', label: 'Check' },
 ];
 
@@ -105,6 +108,14 @@ export class MigrationPlanError extends Error {
 }
 
 export class PostgresAdapter {
+  schemaCapabilities(): SchemaCapabilities {
+    return { createTableIfNotExists: true };
+  }
+
+  editableFieldTypes() {
+    return [...POSTGRES_EDITABLE_FIELD_TYPES];
+  }
+
   async verifyConnection(configuration: PostgresConnectRequest): Promise<VerifiedPostgresConnection> {
     return this.withClient(configuration, async (client) => {
       const result = await client.query<{ serverVersion: string }>(
@@ -154,6 +165,52 @@ export class PostgresAdapter {
     return this.withClient(configuration, (client) => this.inspectTableWithClient(client, schema, table));
   }
 
+  async foreignKeyFieldChoices(
+    configuration: PostgresConnectRequest,
+    sourceSchema: string,
+    sourceTable: string,
+    targetSchema: string,
+    targetTable: string,
+    localFieldNames: string[],
+  ): Promise<{ fieldSets: { fieldNames: string[]; label: string }[] }> {
+    for (const [name, kind] of [[sourceSchema, 'schema'], [targetSchema, 'schema'], [sourceTable, 'table'], [targetTable, 'table']] as const) {
+      validatePostgresIdentifier(name, kind);
+    }
+    if (!localFieldNames.length || localFieldNames.length > 32) {
+      throw new MigrationPlanError('invalid', 'Choose between one and 32 local fields for the foreign key.');
+    }
+    return this.withClient(configuration, async (client) => {
+      const target = await inspectForeignKeyTarget(client, targetSchema, targetTable);
+      if (!target || (target.kind !== 'table' && target.kind !== 'partitionedTable')) return { fieldSets: [] };
+      const [localTypes, targetTypes] = await Promise.all([
+        client.query<{ name: string; typeName: string }>(`
+          SELECT attribute.attname AS name, pg_catalog.format_type(attribute.atttypid, attribute.atttypmod) AS "typeName"
+          FROM pg_catalog.pg_class relation
+          JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace
+          JOIN pg_catalog.pg_attribute attribute ON attribute.attrelid = relation.oid
+          WHERE namespace.nspname = $1 AND relation.relname = $2
+            AND attribute.attnum > 0 AND NOT attribute.attisdropped AND attribute.attname = ANY($3::text[])
+        `, [sourceSchema, sourceTable, localFieldNames]),
+        client.query<{ name: string; typeName: string }>(`
+          SELECT attribute.attname AS name, pg_catalog.format_type(attribute.atttypid, attribute.atttypmod) AS "typeName"
+          FROM pg_catalog.pg_class relation
+          JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace
+          JOIN pg_catalog.pg_attribute attribute ON attribute.attrelid = relation.oid
+          WHERE namespace.nspname = $1 AND relation.relname = $2
+            AND attribute.attnum > 0 AND NOT attribute.attisdropped
+        `, [targetSchema, targetTable]),
+      ]);
+      if (localTypes.rows.length !== localFieldNames.length) return { fieldSets: [] };
+      const localByName = new Map(localTypes.rows.map((field) => [field.name, field.typeName]));
+      const targetByName = new Map(targetTypes.rows.map((field) => [field.name, field.typeName]));
+      const fieldSets = target.uniqueFieldSets
+        .filter((fields) => fields.length === localFieldNames.length
+          && fields.every((field, index) => typesCanReference(localByName.get(localFieldNames[index]) ?? '', targetByName.get(field) ?? '')))
+        .map((fieldNames) => ({ fieldNames, label: fieldNames.join(', ') }));
+      return { fieldSets };
+    });
+  }
+
   async previewMigration(
     configuration: PostgresConnectRequest,
     request: MigrationPreviewRequest,
@@ -161,11 +218,42 @@ export class PostgresAdapter {
     validatePostgresIdentifier(request.schema, 'schema');
     validatePostgresIdentifier(request.table, 'table');
     return this.withClient(configuration, async (client) => {
+      if (request.baselineFingerprint === null) {
+        if (!request.operations.length || request.operations.some((operation) => operation.kind !== 'createTable')) {
+          throw new MigrationPlanError('invalid', 'A new-table plan must contain only create-table operations.');
+        }
+        const operations = request.operations;
+        const tableNames = new Set<string>();
+        for (const operation of operations) {
+          if (operation.kind !== 'createTable') continue;
+          validatePostgresIdentifier(operation.table, 'table');
+          if (tableNames.has(operation.table)) {
+            throw new MigrationPlanError('invalid', `The table "${operation.table}" appears more than once in this runbook.`);
+          }
+          tableNames.add(operation.table);
+          if (operation.ifNotExists && !this.schemaCapabilities().createTableIfNotExists) {
+            throw new MigrationPlanError('invalid', 'This database adapter does not support CREATE TABLE IF NOT EXISTS.');
+          }
+          await assertNewTableTarget(client, request.schema, operation.table, operation.ifNotExists);
+        }
+        return {
+          baselineFingerprint: null,
+          statements: operations.map((operation) => {
+            if (operation.kind !== 'createTable') throw new MigrationPlanError('invalid', 'Invalid create-table operation.');
+            return createTableStatement(request.schema, operation.table, operation.fields, operation.ifNotExists);
+          }),
+          warnings: createTableWarnings(request.schema, operations),
+        };
+      }
+      if (request.operations.some((operation) => operation.kind === 'createTable')) {
+        throw new MigrationPlanError('invalid', 'Create-table operations require a new-table baseline.');
+      }
       const snapshot = await this.inspectTableWithClient(client, request.schema, request.table);
       if (!snapshot) throw new MigrationPlanError('not-found', 'The requested table was not found or is not visible.');
       if (snapshot.fingerprint !== request.baselineFingerprint) {
         throw new MigrationPlanError('drift', 'The table changed since it was loaded. Refresh the schema before drafting a migration.');
       }
+      await validateForeignKeyTargets(client, snapshot, request.operations);
       const preview = createMigrationPreview(snapshot, request);
       const warnings = collectMigrationWarnings(snapshot, request.operations);
       return { baselineFingerprint: snapshot.fingerprint, statements: preview, warnings };
@@ -182,6 +270,56 @@ export class PostgresAdapter {
       await client.query('BEGIN');
       let commitStarted = false;
       try {
+        if (request.baselineFingerprint === null) {
+          if (!request.operations.length || request.operations.some((operation) => operation.kind !== 'createTable')) {
+            throw new MigrationPlanError('invalid', 'A new-table plan must contain only create-table operations.');
+          }
+          const operations = request.operations;
+          const tableNames = new Set<string>();
+          for (const operation of operations) {
+            if (operation.kind !== 'createTable') continue;
+            validatePostgresIdentifier(operation.table, 'table');
+            if (tableNames.has(operation.table)) {
+              throw new MigrationPlanError('invalid', `The table "${operation.table}" appears more than once in this runbook.`);
+            }
+            tableNames.add(operation.table);
+          }
+          for (const table of [...tableNames].sort()) {
+            await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`querydock:create:${request.schema}.${table}`]);
+          }
+          for (const operation of operations) {
+            if (operation.kind === 'createTable') {
+              if (operation.ifNotExists && !this.schemaCapabilities().createTableIfNotExists) {
+                throw new MigrationPlanError('invalid', 'This database adapter does not support CREATE TABLE IF NOT EXISTS.');
+              }
+              await assertNewTableTarget(client, request.schema, operation.table, operation.ifNotExists);
+            }
+          }
+          const statements = operations.map((operation) => {
+            if (operation.kind !== 'createTable') throw new MigrationPlanError('invalid', 'Invalid create-table operation.');
+            return createTableStatement(request.schema, operation.table, operation.fields, operation.ifNotExists);
+          });
+          if (!sameStatements(statements, request.reviewedStatements)) {
+            throw new MigrationPlanError('review-mismatch', 'The reviewed SQL no longer matches this create-table plan. Generate a new preview before applying.');
+          }
+          const warnings = createTableWarnings(request.schema, operations);
+          if (!sameStatements(warnings, request.acknowledgedWarnings)) {
+            throw new MigrationPlanError('review-mismatch', 'Review and acknowledge the current create-table warnings before applying.');
+          }
+          for (const statement of statements) await client.query(statement);
+          const createdSnapshots = await Promise.all(operations.map(async (operation) => {
+            if (operation.kind !== 'createTable') throw new MigrationPlanError('invalid', 'Invalid create-table operation.');
+            const snapshot = await this.inspectTableWithClient(client, request.schema, operation.table);
+            if (!snapshot) throw new MigrationPlanError('unknown', `The table "${operation.table}" was created, but its resulting structure could not be confirmed.`);
+            return snapshot;
+          }));
+          commitStarted = true;
+          const commitResult = await client.query('COMMIT');
+          if (commitResult.command !== 'COMMIT') {
+            throw new MigrationPlanError('unknown', 'The server could not confirm that the table creation committed.');
+          }
+          return { appliedStatements: statements, snapshots: createdSnapshots };
+        }
         await client.query(`LOCK TABLE ${quoteIdentifier(request.schema)}.${quoteIdentifier(request.table)} IN ACCESS EXCLUSIVE MODE`);
         const snapshot = await this.inspectTableWithClient(client, request.schema, request.table);
         if (!snapshot) throw new MigrationPlanError('not-found', 'The requested table was not found or is not visible.');
@@ -189,6 +327,7 @@ export class PostgresAdapter {
           throw new MigrationPlanError('drift', 'The table changed since this preview was generated. Refresh the schema and review the draft again.');
         }
 
+        await validateForeignKeyTargets(client, snapshot, request.operations);
         const statements = createMigrationPreview(snapshot, request);
         if (!sameStatements(statements, request.reviewedStatements)) {
           throw new MigrationPlanError('review-mismatch', 'The reviewed SQL no longer matches this migration plan. Generate a new preview before applying.');
@@ -206,7 +345,7 @@ export class PostgresAdapter {
         if (commitResult.command !== 'COMMIT') {
           throw new MigrationPlanError('unknown', 'The server could not confirm that the migration transaction committed.');
         }
-        return { appliedStatements: statements, snapshot: updatedSnapshot };
+        return { appliedStatements: statements, snapshots: [updatedSnapshot] };
       } catch (error) {
         let rollbackConfirmed = false;
         try {
@@ -327,7 +466,7 @@ export class PostgresAdapter {
     const constraints: TableConstraintDescriptor[] = constraintResult.rows.map((row) => ({
       name: row.name,
       kind: constraintKind(row.constraintType),
-      editable: resource.canAlter && (row.constraintType === 'p' || row.constraintType === 'u' || row.constraintType === 'c'),
+      editable: resource.canAlter && ['p', 'u', 'f', 'c'].includes(row.constraintType),
       fieldNames: row.fieldNames ?? [],
       definition: row.definition,
       referencedSchema: row.referencedSchema,
@@ -426,6 +565,210 @@ export class PostgresAdapter {
       await client.end().catch(() => undefined);
     }
   }
+}
+
+async function assertNewTableTarget(client: Client, schema: string, table: string, ifNotExists = false): Promise<void> {
+  const schemaResult = await client.query<{ exists: boolean; canCreate: boolean }>(
+    `SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = $1) AS "exists",
+      has_schema_privilege(current_user, $1, 'CREATE') AS "canCreate"`,
+    [schema],
+  );
+  if (!schemaResult.rows[0]?.exists) {
+    throw new MigrationPlanError('invalid', `The schema "${schema}" does not exist or is not visible.`);
+  }
+  if (!schemaResult.rows[0].canCreate) {
+    throw new MigrationPlanError('invalid', `The connected PostgreSQL user cannot create tables in schema "${schema}".`);
+  }
+  const tableResult = await client.query<{ exists: boolean }>(`
+    SELECT EXISTS (
+      SELECT 1 FROM pg_catalog.pg_class relation
+      JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace
+      WHERE namespace.nspname = $1 AND relation.relname = $2
+    ) AS "exists"
+  `, [schema, table]);
+  if (tableResult.rows[0]?.exists && !ifNotExists) {
+    throw new MigrationPlanError('invalid', `An object named "${schema}.${table}" already exists.`);
+  }
+}
+
+function createTableWarnings(schema: string, operations: SchemaOperation[]): string[] {
+  const tableNames = operations.flatMap((operation) =>
+    operation.kind === 'createTable' && operation.ifNotExists ? [operation.table] : []);
+  if (!tableNames.length) return [];
+  return [`CREATE TABLE IF NOT EXISTS leaves existing objects unchanged and does not compare their structure with this draft: ${tableNames.map((table) => `"${schema}.${table}"`).join(', ')}.`];
+}
+
+function createTableStatement(schema: string, table: string, fields: CreateTableField[], ifNotExists = false): string {
+  validatePostgresIdentifier(schema, 'schema');
+  validatePostgresIdentifier(table, 'table');
+  if (!fields.length) throw new MigrationPlanError('invalid', 'Add at least one field to the table.');
+  const seenNames = new Set<string>();
+  const definitions = fields.map((field) => {
+    const name = field.name.trim();
+    validateFieldName(name);
+    if (seenNames.has(name)) throw new MigrationPlanError('invalid', `The field "${name}" appears more than once.`);
+    seenNames.add(name);
+    const descriptor = POSTGRES_EDITABLE_FIELD_TYPES.find(({ value }) => value === field.type);
+    if (!descriptor) throw new MigrationPlanError('invalid', `Choose a field type supported by PostgreSQL for "${name}".`);
+    if (field.identityGeneration && !descriptor.identityGenerationSupported) {
+      throw new MigrationPlanError('invalid', `Identity generation is not supported for the ${descriptor.label} field "${name}".`);
+    }
+    if (field.identityGeneration && field.defaultExpression?.trim()) {
+      throw new MigrationPlanError('invalid', `The identity field "${name}" cannot also have a default expression.`);
+    }
+    if (field.identityGeneration && field.nullable) {
+      throw new MigrationPlanError('invalid', `The identity field "${name}" must be non-nullable.`);
+    }
+    const typeDetails = (field.typeDetails ?? '').trim();
+    let characterMaximumLength: number | null = null;
+    let numericPrecision: number | null = null;
+    let numericScale: number | null = null;
+    if (typeDetails && field.type === 'varchar') {
+      if (!/^\d+$/.test(typeDetails)) throw new MigrationPlanError('invalid', `For Varchar field "${name}", enter a positive maximum length, such as 255.`);
+      characterMaximumLength = Number(typeDetails);
+    } else if (typeDetails && field.type === 'numeric') {
+      const match = /^(\d+)(?:\s*,\s*(-?\d+))?$/.exec(typeDetails);
+      if (!match) throw new MigrationPlanError('invalid', `For Numeric field "${name}", enter precision and optional scale, such as 12, 2.`);
+      numericPrecision = Number(match[1]);
+      numericScale = match[2] === undefined ? 0 : Number(match[2]);
+    } else if (typeDetails) {
+      throw new MigrationPlanError('invalid', `${descriptor.label} fields do not accept size or precision parameters.`);
+    }
+    const type = formatFieldType({ type: field.type, characterMaximumLength, numericPrecision, numericScale });
+    const identity = field.identityGeneration
+      ? ` GENERATED ${field.identityGeneration === 'always' ? 'ALWAYS' : 'BY DEFAULT'} AS IDENTITY`
+      : '';
+    const defaultSql = field.defaultExpression?.trim()
+      ? ` DEFAULT ${validateDefaultExpression(field.defaultExpression)}`
+      : '';
+    const nullability = !field.nullable && !field.identityGeneration ? ' NOT NULL' : '';
+    return `  ${quoteIdentifier(name)} ${type}${identity}${defaultSql}${nullability}`;
+  });
+  const clause = ifNotExists ? ' IF NOT EXISTS' : '';
+  return `CREATE TABLE${clause} ${quoteIdentifier(schema)}.${quoteIdentifier(table)} (\n${definitions.join(',\n')}\n);`;
+}
+
+async function validateForeignKeyTargets(
+  client: Client,
+  source: TableSnapshot,
+  operations: SchemaOperation[],
+): Promise<void> {
+  const foreignKeys = operations.filter((operation) =>
+    operation.kind === 'addConstraint' && operation.constraintKind === 'foreignKey');
+  for (const operation of foreignKeys) {
+    validatePostgresIdentifier(operation.referencedSchema, 'schema');
+    validatePostgresIdentifier(operation.referencedTable, 'table');
+    if (operation.fieldNames.length !== operation.referencedFieldNames.length) {
+      throw new MigrationPlanError('invalid', 'A foreign key must pair each local field with exactly one referenced field.');
+    }
+    for (const field of operation.referencedFieldNames) validatePostgresIdentifier(field, 'field');
+
+    const isSelfReference = operation.referencedSchema === source.schema && operation.referencedTable === source.name;
+    const target = isSelfReference
+      ? {
+        kind: source.kind,
+        fieldNames: source.fields.map(({ name }) => name),
+        uniqueFieldSets: source.constraints
+          .filter(({ kind }) => kind === 'primaryKey' || kind === 'unique')
+          .map(({ fieldNames }) => fieldNames),
+      }
+      : await inspectForeignKeyTarget(client, operation.referencedSchema, operation.referencedTable);
+    if (!target) {
+      throw new MigrationPlanError('invalid', `The referenced table "${operation.referencedSchema}.${operation.referencedTable}" does not exist or is not visible.`);
+    }
+    if (target.kind !== 'table' && target.kind !== 'partitionedTable') {
+      throw new MigrationPlanError('invalid', 'A foreign key can reference only a table or partitioned table.');
+    }
+    const missingField = operation.referencedFieldNames.find((name) => !target.fieldNames.includes(name));
+    if (missingField) {
+      throw new MigrationPlanError('invalid', `The referenced field "${missingField}" does not exist on "${operation.referencedSchema}.${operation.referencedTable}".`);
+    }
+    const referencedTypeResult = await client.query<{ name: string; typeName: string }>(`
+      SELECT attribute.attname AS name, pg_catalog.format_type(attribute.atttypid, attribute.atttypmod) AS "typeName"
+      FROM pg_catalog.pg_class relation
+      JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace
+      JOIN pg_catalog.pg_attribute attribute ON attribute.attrelid = relation.oid
+      WHERE namespace.nspname = $1 AND relation.relname = $2
+        AND attribute.attnum > 0 AND NOT attribute.attisdropped AND attribute.attname = ANY($3::text[])
+    `, [operation.referencedSchema, operation.referencedTable, operation.referencedFieldNames]);
+    const referencedTypes = new Map(referencedTypeResult.rows.map((field) => [field.name, field.typeName]));
+    for (let index = 0; index < operation.fieldNames.length; index += 1) {
+      const localField = operation.fieldNames[index];
+      const referencedField = operation.referencedFieldNames[index];
+      const localType = source.fields.find(({ name }) => name === localField)?.typeName ?? '';
+      const referencedType = referencedTypes.get(referencedField) ?? '';
+      if (!typesCanReference(localType, referencedType)) {
+        throw new MigrationPlanError('invalid', `The local field "${localField}" (${localType}) cannot reference "${operation.referencedSchema}.${operation.referencedTable}.${referencedField}" (${referencedType}). Choose fields with compatible PostgreSQL types.`);
+      }
+    }
+    const requested = [...operation.referencedFieldNames].sort().join('\u0000');
+    const hasUniqueTarget = target.uniqueFieldSets.some((fieldNames) => [...fieldNames].sort().join('\u0000') === requested);
+    const plannedUniqueTarget = isSelfReference && operations.some((candidate) =>
+      candidate.kind === 'addConstraint'
+      && (candidate.constraintKind === 'primaryKey' || candidate.constraintKind === 'unique')
+      && [...candidate.fieldNames].sort().join('\u0000') === requested);
+    if (!hasUniqueTarget && !plannedUniqueTarget) {
+      throw new MigrationPlanError('invalid', 'Referenced fields must match a primary key or unique constraint on the target table.');
+    }
+  }
+}
+
+async function inspectForeignKeyTarget(
+  client: Client,
+  schema: string,
+  table: string,
+): Promise<{ kind: string; fieldNames: string[]; uniqueFieldSets: string[][] } | undefined> {
+  const targetResult = await client.query<{ kind: string }>(`
+    SELECT CASE relation.relkind WHEN 'p' THEN 'partitionedTable' ELSE 'table' END AS kind
+    FROM pg_catalog.pg_class relation
+    JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace
+    WHERE namespace.nspname = $1 AND relation.relname = $2 AND relation.relkind IN ('r', 'p')
+  `, [schema, table]);
+  if (!targetResult.rows[0]) return undefined;
+  const fieldResult = await client.query<{ name: string }>(`
+    SELECT attribute.attname AS name
+    FROM pg_catalog.pg_class relation
+    JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace
+    JOIN pg_catalog.pg_attribute attribute ON attribute.attrelid = relation.oid
+    WHERE namespace.nspname = $1 AND relation.relname = $2
+      AND attribute.attnum > 0 AND NOT attribute.attisdropped
+    ORDER BY attribute.attnum
+  `, [schema, table]);
+  const uniqueResult = await client.query<{ fieldNames: string[] }>(`
+    SELECT ARRAY(SELECT attribute.attname
+      FROM unnest(idx.indkey) WITH ORDINALITY AS key_column(attnum, ordinal)
+      JOIN pg_catalog.pg_attribute attribute ON attribute.attrelid = idx.indrelid AND attribute.attnum = key_column.attnum
+      WHERE key_column.ordinal <= idx.indnkeyatts
+      ORDER BY key_column.ordinal) AS "fieldNames"
+    FROM pg_catalog.pg_index idx
+    JOIN pg_catalog.pg_class relation ON relation.oid = idx.indrelid
+    JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace
+    WHERE namespace.nspname = $1 AND relation.relname = $2
+      AND idx.indisunique AND idx.indisvalid AND idx.indpred IS NULL AND idx.indexprs IS NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_constraint constraint_row
+        WHERE constraint_row.conindid = idx.indexrelid AND constraint_row.condeferrable
+      )
+  `, [schema, table]);
+  return {
+    kind: targetResult.rows[0].kind,
+    fieldNames: fieldResult.rows.map(({ name }) => name),
+    uniqueFieldSets: uniqueResult.rows.map(({ fieldNames }) => fieldNames),
+  };
+}
+
+function typesCanReference(localType: string, targetType: string): boolean {
+  const normalize = (type: string) => type.toLowerCase().replace(/\([^)]*\)/g, '').trim();
+  const canonical = (type: string) => ({
+    int2: 'smallint', int4: 'integer', int8: 'bigint', varchar: 'character varying',
+    bpchar: 'character', float4: 'real', float8: 'double precision',
+  } as Record<string, string>)[type] ?? type;
+  const local = canonical(normalize(localType));
+  const target = canonical(normalize(targetType));
+  if (local === target) return true;
+  const integer = new Set(['smallint', 'integer', 'bigint']);
+  const text = new Set(['text', 'character varying', 'character']);
+  return (integer.has(local) && integer.has(target)) || (text.has(local) && text.has(target));
 }
 
 function fieldTypeFor(dataType: string): string | null {
@@ -542,6 +885,9 @@ function createMigrationPreview(snapshot: TableSnapshot, request: MigrationPrevi
   const constraintSources = new Map<string, 'add' | 'drop'>();
   const currentConstraintNames = new Set(snapshot.constraints.map(({ name }) => name));
   for (const operation of request.operations) {
+    if (operation.kind === 'createTable') {
+      throw new MigrationPlanError('invalid', 'Create-table operations require a new-table baseline.');
+    }
     if (operation.kind === 'addNullableField') {
       validateFieldName(operation.name);
       if (operation.identityGeneration && !identityGenerationSupported(operation.type)) {
@@ -618,7 +964,8 @@ function createMigrationPreview(snapshot: TableSnapshot, request: MigrationPrevi
       constraintSources.set(operation.name, 'drop');
       const constraint = snapshot.constraints.find(({ name }) => name === operation.name);
       if (!constraint) throw new MigrationPlanError('invalid', `The constraint "${operation.name}" no longer exists.`);
-      if (constraint.kind !== 'primaryKey' && constraint.kind !== 'unique' && constraint.kind !== 'check') {
+      if (constraint.kind !== 'primaryKey' && constraint.kind !== 'unique'
+        && constraint.kind !== 'check' && constraint.kind !== 'foreignKey') {
         throw new MigrationPlanError('invalid', `Removing ${constraint.kind} constraints is not supported yet.`);
       }
     }
@@ -646,8 +993,13 @@ function createMigrationPreview(snapshot: TableSnapshot, request: MigrationPrevi
       const expression = normalizeCheckExpression(operation.expression, availableFieldNames, renamedFieldNames);
       return [`ALTER TABLE ${table} ADD CONSTRAINT ${quoteIdentifier(operation.name)} CHECK (${expression});`];
     }
-    const kindSql = operation.constraintKind === 'primaryKey' ? 'PRIMARY KEY' : 'UNIQUE';
     const fields = operation.fieldNames.map((name) => quoteIdentifier(renamedFieldNames.get(name) ?? name)).join(', ');
+    if (operation.constraintKind === 'foreignKey') {
+      const referencedFields = operation.referencedFieldNames.map(quoteIdentifier).join(', ');
+      const target = `${quoteIdentifier(operation.referencedSchema)}.${quoteIdentifier(operation.referencedTable)}`;
+      return [`ALTER TABLE ${table} ADD CONSTRAINT ${quoteIdentifier(operation.name)} FOREIGN KEY (${fields}) REFERENCES ${target} (${referencedFields});`];
+    }
+    const kindSql = operation.constraintKind === 'primaryKey' ? 'PRIMARY KEY' : 'UNIQUE';
     return [`ALTER TABLE ${table} ADD CONSTRAINT ${quoteIdentifier(operation.name)} ${kindSql} (${fields});`];
   });
 }
@@ -813,6 +1165,9 @@ function collectMigrationWarnings(snapshot: TableSnapshot, operations: SchemaOpe
     }
     if (operation.kind === 'addConstraint' && operation.constraintKind === 'check') {
       warnings.push(`Adding the CHECK constraint "${operation.name}" may fail if existing rows do not satisfy its expression.`);
+    }
+    if (operation.kind === 'addConstraint' && operation.constraintKind === 'foreignKey') {
+      warnings.push(`Adding the foreign key "${operation.name}" validates existing rows and may fail if any local value has no matching referenced row.`);
     }
     if (operation.kind === 'dropConstraint') {
       const constraint = snapshot.constraints.find(({ name }) => name === operation.name);
@@ -1046,6 +1401,8 @@ function safeDatabaseMessage(error: unknown): string {
   if (code === '28P01' || code === '28000') return 'PostgreSQL authentication failed. Check the username and password.';
   if (code === '3D000') return 'The PostgreSQL database was not found. Check the database name.';
   if (code === '42501') return 'The PostgreSQL user does not have permission to inspect this resource.';
+  if (code === '42804') return 'The local and referenced foreign-key fields must use compatible PostgreSQL types.';
+  if (code === '23503') return 'Existing rows violate the foreign key. Check that each local value has a matching referenced row.';
   if (['ECONNREFUSED', 'ENOTFOUND', 'ETIMEDOUT', 'EHOSTUNREACH', 'ENETUNREACH'].includes(code)) {
     return 'Could not reach PostgreSQL. Check the host, port, and server availability.';
   }

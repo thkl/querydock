@@ -9,6 +9,13 @@ export const routes: Routes = [
     children: [
       { path: '', component: WorkspaceHomeComponent },
       {
+        path: 'tables/create',
+        loadComponent: () =>
+          import('./feature/workspace/table-create/table-create.component').then(
+            (component) => component.TableCreateComponent,
+          ),
+      },
+      {
         path: 'tables/:tableName/schema',
         loadComponent: () =>
           import('./feature/workspace/table-schema/table-schema.component').then(

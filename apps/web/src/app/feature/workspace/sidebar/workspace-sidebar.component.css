@@ -23,6 +23,10 @@
 .tree-row span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .tree-caret { width: 9px; color: var(--color-muted-light); font-size: 1em; }
 .schema-icon { color: var(--color-warning); font-size: 1em; }
+.schema-row > span:nth-of-type(3) { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.schema-row { justify-content: space-between; }
+.schema-add-table { display: inline-grid; width: 24px; height: 24px; flex: 0 0 24px; place-items: center; margin-left: auto; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--color-muted); cursor: pointer; opacity: .8; }
+.schema-row:hover .schema-add-table,.schema-add-table:focus-visible { border-color: var(--color-border); background: var(--color-hover); color: var(--color-accent-strong); opacity: 1; }
 .table-icon { width: 13px; color: #8796aa; font-size: 1em; }
 .table-row { padding-left: 22px; cursor: pointer; }
 .table-row:hover { background: var(--color-hover); color: var(--color-foreground); }

@@ -72,7 +72,7 @@ Descriptors express semantic requirements, not Angular component choices. Angula
 - Backend adapters validate drafts and generate incremental DDL, including ALTER TABLE statements where appropriate.
 - SQL previews surface destructive changes and requirements such as backfills or conversion expressions.
 
-A diagram view is outside MVP scope and is a possible P3 addition. Preserve relationship metadata and stable identities so it can later use the same editing model.
+A database relationship diagram is the first feature in Milestone E. It shows tables and foreign-key relationships and supports creating, changing, and removing those relations through adapter-validated runbook operations. Broader ER modeling remains a possible P3 addition. Preserve relationship metadata and stable identities so the diagram uses the same editing model as the schema grids.
 
 ## 5. Data browsing and editing
 

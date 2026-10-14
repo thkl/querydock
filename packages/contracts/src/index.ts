@@ -20,6 +20,11 @@ export const connectionTargetSchema = postgresConnectRequestSchema
 
 export type ConnectionTarget = z.infer<typeof connectionTargetSchema>;
 
+export const schemaCapabilitiesSchema = z.object({
+  createTableIfNotExists: z.boolean(),
+});
+export type SchemaCapabilities = z.infer<typeof schemaCapabilitiesSchema>;
+
 export const connectionCapabilitiesSchema = z.object({
   discoverResources: z.boolean(),
   inspectTables: z.boolean(),
@@ -34,6 +39,7 @@ export const connectResponseSchema = z.object({
   target: connectionTargetSchema,
   serverVersion: z.string(),
   capabilities: connectionCapabilitiesSchema,
+  schemaCapabilities: schemaCapabilitiesSchema,
 });
 
 export type ConnectResponse = z.infer<typeof connectResponseSchema>;
@@ -68,6 +74,15 @@ export const tableFieldDescriptorSchema = z.object({
 
 export type TableFieldDescriptor = z.infer<typeof tableFieldDescriptorSchema>;
 
+export const editableFieldTypeDescriptorSchema = z.object({
+  value: z.string(),
+  label: z.string(),
+  typeSchema: z.string(),
+  typeName: z.string(),
+  identityGenerationSupported: z.boolean(),
+});
+export type EditableFieldTypeDescriptor = z.infer<typeof editableFieldTypeDescriptorSchema>;
+
 export const tableConstraintDescriptorSchema = z.object({
   name: z.string(),
   kind: z.enum(['primaryKey', 'unique', 'foreignKey', 'check', 'exclusion']),
@@ -81,7 +96,20 @@ export const tableConstraintDescriptorSchema = z.object({
 
 export type TableConstraintDescriptor = z.infer<typeof tableConstraintDescriptorSchema>;
 
-export const editableConstraintKindSchema = z.enum(['primaryKey', 'unique', 'check']);
+export const foreignKeyFieldChoicesSchema = z.object({
+  fieldSets: z.array(z.object({
+    fieldNames: z.array(z.string()).min(1),
+    label: z.string(),
+  })),
+});
+export type ForeignKeyFieldChoices = z.infer<typeof foreignKeyFieldChoicesSchema>;
+
+export const foreignKeyFieldChoicesRequestSchema = z.object({
+  localFieldNames: z.array(z.string().min(1).max(2048)).min(1).max(32),
+});
+export type ForeignKeyFieldChoicesRequest = z.infer<typeof foreignKeyFieldChoicesRequestSchema>;
+
+export const editableConstraintKindSchema = z.enum(['primaryKey', 'unique', 'foreignKey', 'check']);
 export type EditableConstraintKind = z.infer<typeof editableConstraintKindSchema>;
 
 export const tableSnapshotSchema = z.object({
@@ -90,13 +118,7 @@ export const tableSnapshotSchema = z.object({
   kind: resourceDescriptorSchema.shape.kind,
   canAlter: z.boolean(),
   fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
-  editableFieldTypes: z.array(z.object({
-    value: z.string(),
-    label: z.string(),
-    typeSchema: z.string(),
-    typeName: z.string(),
-    identityGenerationSupported: z.boolean(),
-  })),
+  editableFieldTypes: z.array(editableFieldTypeDescriptorSchema),
   editableConstraintKinds: z.array(z.object({ value: editableConstraintKindSchema, label: z.string() })),
   editableIdentityGenerations: z.array(z.object({ value: z.enum(['none', 'always', 'byDefault']), label: z.string() })),
   fields: z.array(tableFieldDescriptorSchema),
@@ -149,6 +171,15 @@ export const addConstraintOperationSchema = z.discriminatedUnion('constraintKind
   }),
   z.object({
     kind: z.literal('addConstraint'),
+    constraintKind: z.literal('foreignKey'),
+    name: z.string().max(2048),
+    fieldNames: z.array(z.string().max(2048)).min(1).max(32),
+    referencedSchema: z.string().max(1024),
+    referencedTable: z.string().max(1024),
+    referencedFieldNames: z.array(z.string().max(2048)).min(1).max(32),
+  }),
+  z.object({
+    kind: z.literal('addConstraint'),
     constraintKind: z.literal('check'),
     name: z.string().max(2048),
     expression: z.string().trim().min(1).max(4096),
@@ -164,7 +195,29 @@ export const dropConstraintOperationSchema = z.object({
 
 export type DropConstraintOperation = z.infer<typeof dropConstraintOperationSchema>;
 
+export const createTableFieldSchema = z.object({
+  name: z.string().max(2048),
+  type: nullableFieldTypeSchema,
+  typeDetails: z.string().max(256).optional(),
+  nullable: z.boolean(),
+  defaultExpression: z.string().max(4096).nullable(),
+  identityGeneration: z.enum(['always', 'byDefault']).nullable(),
+});
+
+export type CreateTableField = z.infer<typeof createTableFieldSchema>;
+
+export const createTableOperationSchema = z.object({
+  kind: z.literal('createTable'),
+  draftId: z.uuid().optional(),
+  table: z.string().max(1024),
+  ifNotExists: z.boolean(),
+  fields: z.array(createTableFieldSchema).min(1).max(64),
+});
+
+export type CreateTableOperation = z.infer<typeof createTableOperationSchema>;
+
 export const schemaOperationSchema = z.discriminatedUnion('kind', [
+  createTableOperationSchema,
   addNullableFieldOperationSchema,
   alterFieldOperationSchema,
   addConstraintOperationSchema,
@@ -176,14 +229,14 @@ export type SchemaOperation = z.infer<typeof schemaOperationSchema>;
 export const migrationPreviewRequestSchema = z.object({
   schema: z.string().max(1024),
   table: z.string().max(1024),
-  baselineFingerprint: tableSnapshotSchema.shape.fingerprint,
+  baselineFingerprint: tableSnapshotSchema.shape.fingerprint.nullable(),
   operations: z.array(schemaOperationSchema).min(1).max(50),
 });
 
 export type MigrationPreviewRequest = z.infer<typeof migrationPreviewRequestSchema>;
 
 export const migrationPreviewResponseSchema = z.object({
-  baselineFingerprint: tableSnapshotSchema.shape.fingerprint,
+  baselineFingerprint: tableSnapshotSchema.shape.fingerprint.nullable(),
   statements: z.array(z.string()),
   warnings: z.array(z.string()),
 });
@@ -223,7 +276,7 @@ export type MigrationApplyRequest = z.infer<typeof migrationApplyRequestSchema>;
 
 export const migrationApplyResponseSchema = z.object({
   appliedStatements: z.array(z.string()),
-  snapshot: tableSnapshotSchema,
+  snapshots: z.array(tableSnapshotSchema).min(1),
 });
 
 export type MigrationApplyResponse = z.infer<typeof migrationApplyResponseSchema>;

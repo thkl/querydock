@@ -2,6 +2,7 @@ import { computed, Injectable, inject, signal } from '@angular/core';
 import type {
   ConnectResponse,
   ConnectionTarget,
+  CreateTableField,
   MigrationApplyRequest,
   MigrationPreviewResponse,
   SchemaFieldDraftRequest,
@@ -14,7 +15,7 @@ export interface SchemaRunbook {
   target: ConnectionTarget;
   schema: string;
   table: string;
-  baseline: TableSnapshot;
+  baseline: TableSnapshot | null;
   operations: SchemaOperation[];
   preview: MigrationPreviewResponse | null;
   appliedBatches: { statements: string[]; appliedAt: string }[];
@@ -23,14 +24,18 @@ export interface SchemaRunbook {
 
 const DATABASE_NAME = 'querydock-browser-state';
 const STORE_NAME = 'runbooks';
-const ACTIVE_RUNBOOK_KEY = 'active';
+const LEGACY_ACTIVE_RUNBOOK_KEY = 'active';
 
 @Injectable({ providedIn: 'root' })
 export class RunbookService {
   private readonly connections = inject(ConnectionApiService);
   private databasePromise?: Promise<IDBDatabase>;
 
-  readonly runbook = signal<SchemaRunbook | null>(null);
+  private readonly runbooksByConnection = signal<ReadonlyMap<string, SchemaRunbook>>(new Map());
+  readonly runbook = computed(() => {
+    const target = this.connections.activeConnection()?.target;
+    return target ? this.runbooksByConnection().get(runbookKey(target)) ?? null : null;
+  });
   readonly pendingOperationCount = computed(() => this.runbook()?.operations.length ?? 0);
   readonly noticeLabel = computed(() => {
     const current = this.runbook();
@@ -66,18 +71,19 @@ export class RunbookService {
   ): Promise<void> {
     await this.ready;
     this.error.set(null);
-    const current = this.runbook();
+    const current = this.runbookForTarget(connection.target);
+    const currentMatches = current && sameRunbookResource(current, connection.target, snapshot.schema, snapshot.name);
     if (current?.applyOutcomeUnknown) {
       throw new Error('The previous Apply outcome is unknown. Inspect the database before staging or applying more changes.');
     }
-    if (current && (!sameTarget(current.target, connection.target)
-      || current.schema !== snapshot.schema || current.table !== snapshot.name)) {
-      throw new Error('The open runbook belongs to another database or table. Export any applied SQL, then clear it before starting a different runbook.');
+    if (current?.operations.length && !currentMatches) {
+      throw new Error('This database runbook has pending changes for another table. Apply or clear those changes before staging a different table.');
     }
 
-    const baseline = current?.baseline ?? snapshot;
+    const baseline = currentMatches ? current?.baseline ?? snapshot : snapshot;
     const key = draft.sourceName ?? replacementName ?? draft.name;
-    const matches = (candidate: SchemaOperation): boolean => candidate.name === key;
+    const matches = (candidate: SchemaOperation): boolean =>
+      (candidate.kind === 'addNullableField' || candidate.kind === 'alterField') && candidate.name === key;
     const retained = (current?.operations ?? []).filter((candidate) =>
       !(candidate.kind === 'addNullableField' || candidate.kind === 'alterField') || !matches(candidate));
     const request: SchemaFieldDraftRequest = {
@@ -94,7 +100,7 @@ export class RunbookService {
       if (!fieldPreview.operations.length) {
         if (current) {
           const updated = { ...current, operations: [], preview: null };
-          this.runbook.set(updated);
+          this.setRunbookForTarget(connection.target, updated);
           await this.persist(updated);
         }
         return;
@@ -110,7 +116,65 @@ export class RunbookService {
         appliedBatches: current?.appliedBatches ?? [],
         applyOutcomeUnknown: false,
       };
-      this.runbook.set(runbook);
+      this.setRunbookForTarget(connection.target, runbook);
+      await this.persist(runbook);
+    } catch (error) {
+      this.error.set(messageOf(error));
+      throw error;
+    } finally {
+      this.previewing.set(false);
+    }
+  }
+
+  async stageCreateTable(
+    connection: ConnectResponse,
+    schema: string,
+    table: string,
+    fields: CreateTableField[],
+    ifNotExists: boolean,
+    draftId: string,
+  ): Promise<void> {
+    await this.ready;
+    this.error.set(null);
+    const current = this.runbookForTarget(connection.target);
+    if (current?.applyOutcomeUnknown) {
+      throw new Error('The previous Apply outcome is unknown. Inspect the database before staging or applying more changes.');
+    }
+    const isPendingCreateBatch = current?.baseline === null
+      && current.operations.every((operation) => operation.kind === 'createTable');
+    if (current?.operations.length && !isPendingCreateBatch) {
+      throw new Error('Apply or clear the pending table changes before adding new table drafts to this runbook.');
+    }
+    if (isPendingCreateBatch && current?.schema !== schema) {
+      throw new Error('A runbook can stage new tables from one schema at a time. Apply or clear the current table drafts before switching schemas.');
+    }
+
+    const createOperation: SchemaOperation = { kind: 'createTable', draftId, table, ifNotExists, fields };
+    const operations: SchemaOperation[] = [
+      ...(isPendingCreateBatch ? current.operations.filter((operation) =>
+        operation.kind !== 'createTable' || (operation.draftId ? operation.draftId !== draftId : operation.table !== table)) : []),
+      createOperation,
+    ];
+    const firstTable = operations.find((operation) => operation.kind === 'createTable')?.table ?? table;
+    this.previewing.set(true);
+    try {
+      const preview = await this.connections.previewMigration(connection.connectionId, {
+        schema,
+        table: firstTable,
+        baselineFingerprint: null,
+        operations,
+      });
+      const runbook: SchemaRunbook = {
+        target: connection.target,
+        schema,
+        table: firstTable,
+        baseline: null,
+        operations,
+        preview,
+        appliedBatches: current?.appliedBatches ?? [],
+        applyOutcomeUnknown: false,
+      };
+      this.setRunbookForTarget(connection.target, runbook);
       await this.persist(runbook);
     } catch (error) {
       this.error.set(messageOf(error));
@@ -126,25 +190,70 @@ export class RunbookService {
     operation: Extract<SchemaOperation, { kind: 'addConstraint' | 'dropConstraint' }> | null,
     replacementName: string,
   ): Promise<void> {
+    await this.stageSchemaOperations(connection, snapshot, operation ? [operation] : [], [replacementName]);
+  }
+
+  async discardCreateTableDraft(draftId: string, tableName: string): Promise<void> {
+    await this.ready;
+    const entry = [...this.runbooksByConnection().entries()].find(([, runbook]) =>
+      runbook.operations.some((operation) => matchesCreateTableDraft(operation, draftId, tableName)));
+    if (!entry) return;
+    const [, current] = entry;
+    if (current.applyOutcomeUnknown) {
+      throw new Error('Reconcile the runbook Apply outcome before closing this staged table draft.');
+    }
+    if (current.operations.some((operation) => operation.kind !== 'createTable')) {
+      throw new Error('Apply or clear the other pending schema changes before removing this table draft.');
+    }
+    const remaining = current.operations.filter((operation) => !matchesCreateTableDraft(operation, draftId, tableName));
+    let preview: MigrationPreviewResponse | null = null;
+    const firstTable = remaining.find((operation) => operation.kind === 'createTable')?.table;
+    if (firstTable) {
+      const connection = this.matchingConnection(current.target);
+      if (!connection) throw new Error('Reconnect to this database before removing a staged table from the runbook.');
+      preview = await this.connections.previewMigration(connection.connectionId, {
+        schema: current.schema,
+        table: firstTable,
+        baselineFingerprint: null,
+        operations: remaining,
+      });
+    }
+    const updated: SchemaRunbook = {
+      ...current,
+      table: firstTable ?? current.table,
+      operations: remaining,
+      preview,
+    };
+    this.setRunbookForTarget(current.target, updated);
+    this.error.set(null);
+    await this.persist(updated);
+  }
+
+  async stageSchemaOperations(
+    connection: ConnectResponse,
+    snapshot: TableSnapshot,
+    replacements: Extract<SchemaOperation, { kind: 'addConstraint' | 'dropConstraint' }>[],
+    replacementNames: string[],
+  ): Promise<void> {
     await this.ready;
     this.error.set(null);
-    const current = this.runbook();
+    const current = this.runbookForTarget(connection.target);
+    const currentMatches = current && sameRunbookResource(current, connection.target, snapshot.schema, snapshot.name);
     if (current?.applyOutcomeUnknown) {
       throw new Error('The previous Apply outcome is unknown. Inspect the database before staging or applying more changes.');
     }
-    if (current && (!sameTarget(current.target, connection.target)
-      || current.schema !== snapshot.schema || current.table !== snapshot.name)) {
-      throw new Error('The open runbook belongs to another database or table. Export any applied SQL, then clear it before starting a different runbook.');
+    if (current?.operations.length && !currentMatches) {
+      throw new Error('This database runbook has pending changes for another table. Apply or clear those changes before staging a different table.');
     }
 
-    const baseline = current?.baseline ?? snapshot;
+    const baseline = currentMatches ? current?.baseline ?? snapshot : snapshot;
     const retained = (current?.operations ?? []).filter((candidate) =>
-      !(candidate.kind === 'addConstraint' || candidate.kind === 'dropConstraint') || candidate.name !== replacementName);
-    const operations = operation ? [...retained, operation] : retained;
+      !(candidate.kind === 'addConstraint' || candidate.kind === 'dropConstraint') || !replacementNames.includes(candidate.name));
+    const operations = [...retained, ...replacements];
     if (!operations.length) {
       if (current) {
         const updated = { ...current, operations: [], preview: null };
-        this.runbook.set(updated);
+        this.setRunbookForTarget(connection.target, updated);
         await this.persist(updated);
       }
       return;
@@ -168,7 +277,7 @@ export class RunbookService {
         appliedBatches: current?.appliedBatches ?? [],
         applyOutcomeUnknown: false,
       };
-      this.runbook.set(runbook);
+      this.setRunbookForTarget(connection.target, runbook);
       await this.persist(runbook);
     } catch (error) {
       this.error.set(messageOf(error));
@@ -189,7 +298,7 @@ export class RunbookService {
     const plan: MigrationApplyRequest = {
       schema: current.schema,
       table: current.table,
-      baselineFingerprint: current.baseline.fingerprint,
+      baselineFingerprint: current.baseline?.fingerprint ?? null,
       operations: current.operations,
       reviewedStatements: current.preview.statements,
       acknowledgedWarnings,
@@ -197,23 +306,27 @@ export class RunbookService {
     this.applying.set(true);
     this.error.set(null);
     const inFlight = { ...current, applyOutcomeUnknown: true };
-    this.runbook.set(inFlight);
+    this.setRunbookForTarget(current.target, inFlight);
     await this.persist(inFlight);
     try {
       const result = await this.connections.applyMigration(connection.connectionId, plan);
       const updated: SchemaRunbook = {
         ...current,
-        baseline: result.snapshot,
+        baseline: current.baseline === null ? null : result.snapshots[0],
         operations: [],
         preview: null,
         appliedBatches: [...current.appliedBatches, { statements: result.appliedStatements, appliedAt: new Date().toISOString() }],
         applyOutcomeUnknown: false,
       };
-      this.runbook.set(updated);
+      this.setRunbookForTarget(current.target, updated);
       await this.persist(updated);
+      if (current.baseline === null) {
+        const connectionId = connection.connectionId;
+        await this.connections.refreshResources(connectionId).catch(() => undefined);
+      }
     } catch (error) {
       if (!isUncertainApplyError(error)) {
-        this.runbook.set(current);
+        this.setRunbookForTarget(current.target, current);
         await this.persist(current);
       }
       this.error.set(messageOf(error));
@@ -229,7 +342,7 @@ export class RunbookService {
     if (!current || current.applyOutcomeUnknown) return;
     const connection = this.matchingConnection(current.target);
     let baseline = current.baseline;
-    if (connection) {
+    if (connection && baseline) {
       try {
         baseline = await this.connections.inspectTable(connection.connectionId, current.schema, current.table);
       } catch {
@@ -237,7 +350,7 @@ export class RunbookService {
       }
     }
     const updated = { ...current, baseline, operations: [], preview: null };
-    this.runbook.set(updated);
+    this.setRunbookForTarget(current.target, updated);
     this.error.set(null);
     await this.persist(updated);
   }
@@ -263,7 +376,64 @@ export class RunbookService {
     const connection = this.matchingConnection(current.target);
     if (!connection) throw new Error('Reconnect to the runbook target before reconciling the batch.');
 
-    const snapshot = await this.connections.inspectTable(connection.connectionId, current.schema, current.table);
+    if (current.baseline === null && current.operations.length
+      && current.operations.every((operation) => operation.kind === 'createTable')) {
+      const observed: TableSnapshot[] = [];
+      for (const operation of current.operations) {
+        if (operation.kind !== 'createTable') continue;
+        try {
+          const snapshot = await this.connections.inspectTable(connection.connectionId, current.schema, operation.table);
+          observed.push(snapshot);
+        } catch (error) {
+          if (outcome === 'notApplied' && error instanceof ApiRequestError && error.status === 404) continue;
+          throw error;
+        }
+      }
+      if (outcome === 'applied') {
+        const allChangesPresent = current.operations.every((operation) => operation.kind === 'createTable'
+          && observed.some((snapshot) => operationMatchesSnapshot(snapshot, operation)));
+        if (!allChangesPresent) {
+          throw new Error('The database does not contain every expected table from this batch. Keep the outcome unknown and inspect it manually.');
+        }
+        const updated: SchemaRunbook = {
+          ...current,
+          baseline: null,
+          operations: [],
+          preview: null,
+          appliedBatches: [...current.appliedBatches, {
+            statements: current.preview.statements,
+            appliedAt: new Date().toISOString(),
+          }],
+          applyOutcomeUnknown: false,
+        };
+        this.setRunbookForTarget(current.target, updated);
+        this.error.set(null);
+        await this.persist(updated);
+        return;
+      }
+      if (observed.length) {
+        throw new Error('One or more named tables exist, so this batch cannot safely be marked unapplied. Inspect and reconcile the schema manually.');
+      }
+      const updated = { ...current, applyOutcomeUnknown: false };
+      this.setRunbookForTarget(current.target, updated);
+      this.error.set(null);
+      await this.persist(updated);
+      return;
+    }
+
+    let snapshot: TableSnapshot;
+    try {
+      snapshot = await this.connections.inspectTable(connection.connectionId, current.schema, current.table);
+    } catch (error) {
+      if (outcome === 'notApplied' && current.baseline === null && error instanceof ApiRequestError && error.status === 404) {
+        const updated = { ...current, applyOutcomeUnknown: false };
+        this.setRunbookForTarget(current.target, updated);
+        this.error.set(null);
+        await this.persist(updated);
+        return;
+      }
+      throw error;
+    }
     if (outcome === 'applied') {
       const allChangesPresent = current.operations.every((operation) => operationMatchesSnapshot(snapshot, operation));
       if (!allChangesPresent) {
@@ -280,17 +450,17 @@ export class RunbookService {
         }],
         applyOutcomeUnknown: false,
       };
-      this.runbook.set(updated);
+      this.setRunbookForTarget(current.target, updated);
       this.error.set(null);
       await this.persist(updated);
       return;
     }
 
-    if (snapshot.fingerprint !== current.baseline.fingerprint) {
+    if (!current.baseline || snapshot.fingerprint !== current.baseline.fingerprint) {
       throw new Error('The table no longer matches the original baseline, so this batch cannot be safely marked unapplied. Inspect and reconcile the schema manually.');
     }
     const updated = { ...current, applyOutcomeUnknown: false };
-    this.runbook.set(updated);
+    this.setRunbookForTarget(current.target, updated);
     this.error.set(null);
     await this.persist(updated);
   }
@@ -301,11 +471,13 @@ export class RunbookService {
       this.error.set('Reconcile the unknown batch before clearing this runbook.');
       return;
     }
-    this.runbook.set(null);
+    const current = this.runbook();
+    if (!current) return;
+    this.setRunbookForTarget(current.target, null);
     this.error.set(null);
     try {
       const database = await this.openDatabase();
-      await transactionRequest(database, (store) => store.delete(ACTIVE_RUNBOOK_KEY));
+      await transactionRequest(database, (store) => store.delete(runbookKey(current.target)));
     } catch {
       this.storageAvailable.set(false);
     }
@@ -329,6 +501,20 @@ export class RunbookService {
     setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 
+  private runbookForTarget(target: ConnectionTarget): SchemaRunbook | null {
+    return this.runbooksByConnection().get(runbookKey(target)) ?? null;
+  }
+
+  private setRunbookForTarget(target: ConnectionTarget, runbook: SchemaRunbook | null): void {
+    this.runbooksByConnection.update((current) => {
+      const next = new Map(current);
+      const key = runbookKey(target);
+      if (runbook) next.set(key, runbook);
+      else next.delete(key);
+      return next;
+    });
+  }
+
   private matchingConnection(target: ConnectionTarget): ConnectResponse | undefined {
     return this.connections.connections().find((connection) => sameTarget(connection.target, target));
   }
@@ -337,8 +523,45 @@ export class RunbookService {
     try {
       const database = await this.openDatabase();
       const transaction = database.transaction(STORE_NAME, 'readonly');
-      const result = await requestResult<SchemaRunbook | undefined>(transaction.objectStore(STORE_NAME).get(ACTIVE_RUNBOOK_KEY));
-      this.runbook.set(result ?? null);
+      const store = transaction.objectStore(STORE_NAME);
+      const transactionDone = new Promise<void>((resolve, reject) => {
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(transaction.error);
+      });
+      const [records, keys] = await Promise.all([
+        requestResult<SchemaRunbook[]>(store.getAll()),
+        requestResult<IDBValidKey[]>(store.getAllKeys()),
+      ]);
+      const restored = new Map<string, SchemaRunbook>();
+      let legacy: SchemaRunbook | null = null;
+      for (let index = 0; index < records.length; index += 1) {
+        const rawRecord = records[index];
+        const key = String(keys[index]);
+        const record = rawRecord?.target ? normalizeRunbook(rawRecord) : rawRecord;
+        if (!record?.target) continue;
+        if (key === LEGACY_ACTIVE_RUNBOOK_KEY) legacy = record;
+        else restored.set(runbookKey(record.target), record);
+      }
+      await transactionDone;
+      if (legacy) {
+        const migratedKey = runbookKey(legacy.target);
+        const stableRecordExists = keys.some((key) => String(key) === migratedKey);
+        if (!restored.has(migratedKey)) restored.set(migratedKey, legacy);
+        const writeTransaction = database.transaction(STORE_NAME, 'readwrite');
+        const writeStore = writeTransaction.objectStore(STORE_NAME);
+        const migrationDone = new Promise<void>((resolve, reject) => {
+          writeTransaction.oncomplete = () => resolve();
+          writeTransaction.onerror = () => reject(writeTransaction.error);
+          writeTransaction.onabort = () => reject(writeTransaction.error);
+        });
+        if (!stableRecordExists) {
+          writeStore.put(restored.get(migratedKey) ?? legacy, migratedKey);
+        }
+        writeStore.delete(LEGACY_ACTIVE_RUNBOOK_KEY);
+        await migrationDone;
+      }
+      this.runbooksByConnection.set(restored);
     } catch {
       this.storageAvailable.set(false);
     }
@@ -347,7 +570,7 @@ export class RunbookService {
   private async persist(runbook: SchemaRunbook): Promise<void> {
     try {
       const database = await this.openDatabase();
-      await transactionRequest(database, (store) => store.put(runbook, ACTIVE_RUNBOOK_KEY));
+      await transactionRequest(database, (store) => store.put(runbook, runbookKey(runbook.target)));
       this.storageAvailable.set(true);
     } catch {
       this.storageAvailable.set(false);
@@ -373,9 +596,48 @@ export class RunbookService {
   }
 }
 
+function runbookKey(target: ConnectionTarget): string {
+  return `connection:${encodeURIComponent(JSON.stringify([
+    target.adapter,
+    target.host,
+    target.port,
+    target.database,
+    target.username,
+  ]))}`;
+}
+
 function sameTarget(left: ConnectionTarget, right: ConnectionTarget): boolean {
   return left.adapter === right.adapter && left.host === right.host && left.port === right.port
     && left.database === right.database && left.username === right.username;
+}
+
+function sameRunbookResource(
+  runbook: SchemaRunbook,
+  target: ConnectionTarget,
+  schema: string,
+  table: string,
+): boolean {
+  return sameTarget(runbook.target, target) && runbook.schema === schema && runbook.table === table;
+}
+
+function matchesCreateTableDraft(operation: SchemaOperation, draftId: string, tableName: string): boolean {
+  return operation.kind === 'createTable'
+    && (operation.draftId === draftId || (!operation.draftId && operation.table === tableName));
+}
+
+function normalizeRunbook(runbook: SchemaRunbook): SchemaRunbook {
+  return {
+    ...runbook,
+    operations: runbook.operations.map((operation) => {
+      if (operation.kind !== 'createTable') return operation;
+      const legacy = operation as typeof operation & { table?: string; ifNotExists?: boolean };
+      return {
+        ...operation,
+        table: legacy.table ?? runbook.table,
+        ifNotExists: legacy.ifNotExists ?? false,
+      };
+    }),
+  };
 }
 
 function messageOf(error: unknown): string {
@@ -405,6 +667,13 @@ function operationMatchesField(
 }
 
 function operationMatchesSnapshot(snapshot: TableSnapshot, operation: SchemaOperation): boolean {
+  if (operation.kind === 'createTable') {
+    return snapshot.name === operation.table && (operation.ifNotExists || snapshot.fields.length === operation.fields.length
+      && operation.fields.every((expected) => {
+        const field = snapshot.fields.find((candidate) => candidate.name === expected.name);
+        return field !== undefined && createdFieldMatches(field, expected);
+      }));
+  }
   if (operation.kind === 'addNullableField' || operation.kind === 'alterField') {
     const name = operation.kind === 'alterField' ? operation.newName : operation.name;
     const field = snapshot.fields.find((candidate) => candidate.name === name);
@@ -418,8 +687,38 @@ function operationMatchesSnapshot(snapshot: TableSnapshot, operation: SchemaOper
       .replace(/[\s()]/g, '').toLowerCase();
     return normalize(constraint.definition) === normalize(operation.expression);
   }
-  return constraint.fieldNames.length === operation.fieldNames.length
+  const fieldsMatch = constraint.fieldNames.length === operation.fieldNames.length
     && constraint.fieldNames.every((name, index) => name === operation.fieldNames[index]);
+  if (!fieldsMatch) return false;
+  if (operation.constraintKind !== 'foreignKey') return true;
+  return constraint.referencedSchema === operation.referencedSchema
+    && constraint.referencedTable === operation.referencedTable
+    && constraint.referencedFieldNames.length === operation.referencedFieldNames.length
+    && constraint.referencedFieldNames.every((name, index) => name === operation.referencedFieldNames[index]);
+}
+
+function createdFieldMatches(
+  field: TableSnapshot['fields'][number],
+  expected: Extract<SchemaOperation, { kind: 'createTable' }>['fields'][number],
+): boolean {
+  const typeMatches = field.editableType === expected.type;
+  let detailsMatch = true;
+  if (expected.type === 'varchar') {
+    const length = expected.typeDetails?.trim() ? Number(expected.typeDetails.trim()) : null;
+    detailsMatch = field.characterMaximumLength === length;
+  } else if (expected.type === 'numeric') {
+    const match = expected.typeDetails?.trim()
+      ? /^(\d+)(?:\s*,\s*(-?\d+))?$/.exec(expected.typeDetails.trim())
+      : null;
+    if (match) {
+      const precision = Number(match[1]);
+      const scale = Number(match[2] ?? 0);
+      detailsMatch = field.numericPrecision === precision && field.numericScale === scale;
+    }
+  }
+  return typeMatches && detailsMatch && field.nullable === expected.nullable
+    && (field.defaultExpression?.trim() ?? null) === (expected.defaultExpression?.trim() || null)
+    && (field.identityGeneration ?? null) === expected.identityGeneration;
 }
 
 function requestResult<T>(request: IDBRequest<T>): Promise<T> {
