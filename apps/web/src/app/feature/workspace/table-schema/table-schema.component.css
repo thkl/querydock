@@ -72,6 +72,12 @@ h1 {
   font-size: .85em;
 }
 
+.stage-progress {
+  margin: 12px 16px;
+  color: var(--color-accent);
+  font-size: .85em;
+}
+
 .storage-warning {
   color: var(--color-warning);
 }
@@ -115,6 +121,13 @@ h1 {
   margin-top: 6px;
   color: var(--color-muted-light);
   font-size: .8em;
+}
+
+.fields-instructions--detail {
+  margin: 6px 16px 12px;
+  color: var(--color-muted-light);
+  font-size: .78em;
+  line-height: 1.45;
 }
 
 .fields-instructions strong {

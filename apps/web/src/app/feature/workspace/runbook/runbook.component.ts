@@ -16,8 +16,20 @@ export class RunbookComponent {
   readonly runbook = inject(RunbookService);
   private readonly confirmation = inject(ConfirmationDialogService);
 
-  apply(): void {
-    void this.runbook.applyPending().catch(() => undefined);
+  async apply(): Promise<void> {
+    const warnings = this.runbook.runbook()?.preview?.warnings ?? [];
+    let acknowledgedWarnings: string[] = [];
+    if (warnings.length) {
+      const confirmed = await this.confirmation.confirm({
+        title: 'Review migration warnings',
+        message: `${warnings.join(' ')} Applying confirms you reviewed these risks for this batch.`,
+        confirmLabel: 'Acknowledge and apply',
+        intent: 'warning',
+      });
+      if (!confirmed) return;
+      acknowledgedWarnings = warnings;
+    }
+    void this.runbook.applyPending(acknowledgedWarnings).catch(() => undefined);
   }
 
   discard(): void {

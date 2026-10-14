@@ -4,6 +4,8 @@ import type {
   MigrationApplyResponse,
   MigrationPreviewRequest,
   MigrationPreviewResponse,
+  SchemaFieldDraftRequest,
+  SchemaFieldDraftResponse,
   ConnectResponse,
   PostgresConnectRequest,
   ResourceDescriptor,
@@ -99,6 +101,19 @@ export class ConnectionApiService {
       method: 'POST',
       body: JSON.stringify(plan),
     }).then(parseMigrationPreview);
+  }
+
+  previewSchemaFieldDraft(connectionId: string, draft: SchemaFieldDraftRequest): Promise<SchemaFieldDraftResponse> {
+    return request<unknown>(`/api/connections/${encodeURIComponent(connectionId)}/migrations/field-draft`, {
+      method: 'POST',
+      body: JSON.stringify(draft),
+    }).then((payload) => {
+      const preview = parseMigrationPreview(payload);
+      if (!isRecord(payload) || !Array.isArray(payload['operations'])) {
+        throw new Error('The server returned an invalid schema field preview.');
+      }
+      return { ...preview, operations: payload['operations'] } as SchemaFieldDraftResponse;
+    });
   }
 
   applyMigration(connectionId: string, plan: MigrationApplyRequest): Promise<MigrationApplyResponse> {

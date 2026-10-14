@@ -241,6 +241,18 @@ h1 {
   font-size: .75em;
 }
 
+.migration-warnings {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 10px 16px 12px 34px;
+  border-top: 1px solid var(--color-draft-border);
+  background: var(--color-draft-subtle);
+  color: var(--color-warning);
+  font-size: .84em;
+  line-height: 1.45;
+}
+
 .runbook-actions {
   display: flex;
   align-items: center;

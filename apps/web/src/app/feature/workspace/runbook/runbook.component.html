@@ -51,6 +51,15 @@
         <span class="readonly-pill"><span aria-hidden="true">▣</span> READ ONLY</span>
       </div>
       <qd-sql-editor class="preview-editor" [value]="runbook.previewSql()" [readOnly]="true" ariaLabel="Read-only pending SQL preview" />
+      @if (state.preview; as preview) {
+        @if (preview.warnings.length) {
+          <ul class="migration-warnings" aria-label="Migration warnings">
+            @for (warning of preview.warnings; track warning) {
+              <li>{{ warning }}</li>
+            }
+          </ul>
+        }
+      }
       <footer class="preview-status">
         <span>{{ state.preview?.statements?.length ?? 0 }} pending statements</span>
         <span>Baseline {{ state.baseline.fingerprint.slice(0, 12) }} · not executed</span>
@@ -76,7 +85,7 @@
     <section class="empty-runbook">
       <span class="sql-mark" aria-hidden="true">SQL</span>
       <h2>No schema changes staged</h2>
-      <p>Choose a table in the sidebar and stage a nullable field to preview its migration here.</p>
+      <p>Choose a table to add a nullable field or draft supported field changes for review here.</p>
     </section>
   }
 </section>

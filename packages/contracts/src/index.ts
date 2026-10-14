@@ -53,6 +53,8 @@ export const tableFieldDescriptorSchema = z.object({
   typeSchema: z.string(),
   typeName: z.string(),
   dataType: z.string(),
+  editableType: z.string().nullable(),
+  editable: z.boolean(),
   characterMaximumLength: z.number().nullable(),
   numericPrecision: z.number().nullable(),
   numericScale: z.number().nullable(),
@@ -83,39 +85,57 @@ export const tableSnapshotSchema = z.object({
   kind: resourceDescriptorSchema.shape.kind,
   canAlter: z.boolean(),
   fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+  editableFieldTypes: z.array(z.object({ value: z.string(), label: z.string(), typeSchema: z.string(), typeName: z.string() })),
   fields: z.array(tableFieldDescriptorSchema),
   constraints: z.array(tableConstraintDescriptorSchema),
 });
 
 export type TableSnapshot = z.infer<typeof tableSnapshotSchema>;
 
-export const nullableFieldTypeSchema = z.enum([
-  'text',
-  'integer',
-  'bigint',
-  'boolean',
-  'uuid',
-  'date',
-  'timestamptz',
-  'jsonb',
-  'numeric',
-]);
+// Type identifiers and parameter rules belong to the active database adapter.
+export const nullableFieldTypeSchema = z.string().trim().min(1).max(128);
 
 export type NullableFieldType = z.infer<typeof nullableFieldTypeSchema>;
 
 export const addNullableFieldOperationSchema = z.object({
   kind: z.literal('addNullableField'),
-  name: z.string().trim().min(1).max(63),
+  name: z.string().max(2048),
   type: nullableFieldTypeSchema,
+  typeDetails: z.string().max(256).optional(),
+  characterMaximumLength: z.number().nullable().optional(),
+  numericPrecision: z.number().nullable().optional(),
+  numericScale: z.number().nullable().optional(),
+  defaultExpression: z.string().max(4096).nullable().optional(),
 });
 
 export type AddNullableFieldOperation = z.infer<typeof addNullableFieldOperationSchema>;
 
+export const alterFieldOperationSchema = z.object({
+  kind: z.literal('alterField'),
+  name: z.string().max(2048),
+  newName: z.string().max(2048),
+  type: nullableFieldTypeSchema,
+  typeDetails: z.string().max(256).optional(),
+  characterMaximumLength: z.number().nullable(),
+  numericPrecision: z.number().nullable(),
+  numericScale: z.number().nullable(),
+  defaultExpression: z.string().max(4096).nullable(),
+});
+
+export type AlterFieldOperation = z.infer<typeof alterFieldOperationSchema>;
+
+export const schemaOperationSchema = z.discriminatedUnion('kind', [
+  addNullableFieldOperationSchema,
+  alterFieldOperationSchema,
+]);
+
+export type SchemaOperation = z.infer<typeof schemaOperationSchema>;
+
 export const migrationPreviewRequestSchema = z.object({
-  schema: z.string().trim().min(1).max(63),
-  table: z.string().trim().min(1).max(63),
+  schema: z.string().max(1024),
+  table: z.string().max(1024),
   baselineFingerprint: tableSnapshotSchema.shape.fingerprint,
-  operations: z.array(addNullableFieldOperationSchema).min(1).max(50),
+  operations: z.array(schemaOperationSchema).min(1).max(50),
 });
 
 export type MigrationPreviewRequest = z.infer<typeof migrationPreviewRequestSchema>;
@@ -128,8 +148,31 @@ export const migrationPreviewResponseSchema = z.object({
 
 export type MigrationPreviewResponse = z.infer<typeof migrationPreviewResponseSchema>;
 
+export const schemaFieldDraftRequestSchema = z.object({
+  schema: z.string().max(1024),
+  table: z.string().max(1024),
+  baselineFingerprint: tableSnapshotSchema.shape.fingerprint,
+  operations: z.array(schemaOperationSchema).max(50),
+  draft: z.object({
+    sourceName: z.string().nullable(),
+    name: z.string().max(2048),
+    type: z.string().max(128),
+    typeDetails: z.string().max(256),
+    defaultValue: z.string().max(4096),
+  }),
+});
+
+export type SchemaFieldDraftRequest = z.infer<typeof schemaFieldDraftRequestSchema>;
+
+export const schemaFieldDraftResponseSchema = migrationPreviewResponseSchema.extend({
+  operations: z.array(schemaOperationSchema).max(50),
+});
+
+export type SchemaFieldDraftResponse = z.infer<typeof schemaFieldDraftResponseSchema>;
+
 export const migrationApplyRequestSchema = migrationPreviewRequestSchema.extend({
-  reviewedStatements: z.array(z.string().max(2048)).min(1).max(50),
+  reviewedStatements: z.array(z.string().max(4096)).min(1).max(150),
+  acknowledgedWarnings: z.array(z.string().max(2048)).max(50),
 });
 
 export type MigrationApplyRequest = z.infer<typeof migrationApplyRequestSchema>;

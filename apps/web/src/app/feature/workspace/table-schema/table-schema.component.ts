@@ -3,8 +3,8 @@ import { ActivatedRoute, RouterLink } from '@angular/router';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { combineLatest } from 'rxjs';
 import type {
-  AddNullableFieldOperation,
-  NullableFieldType,
+  SchemaFieldDraftRequest,
+  SchemaOperation,
   TableConstraintDescriptor,
   TableSnapshot,
 } from '@querydock/contracts';
@@ -25,6 +25,9 @@ import { RunbookService } from '../runbook/runbook.service';
 import { SchemaBadgeCellComponent } from './schema-badge-cell.component';
 
 interface SchemaFieldRow {
+  sourceName: string | null;
+  operationName: string | null;
+  canEdit: boolean;
   name: string;
   dataType: string;
   typeDetails: string;
@@ -44,15 +47,6 @@ interface SchemaConstraintRow {
   definition: string;
   references: string;
 }
-
-const fieldTypeLabels: Record<NullableFieldType, string> = {
-  text: 'text', integer: 'integer', bigint: 'bigint', numeric: 'numeric', boolean: 'boolean',
-  uuid: 'uuid', date: 'date', timestamptz: 'timestamp with time zone', jsonb: 'jsonb',
-};
-const fieldTypeNames: Record<NullableFieldType, string> = {
-  text: 'text', integer: 'int4', bigint: 'int8', numeric: 'numeric', boolean: 'bool',
-  uuid: 'uuid', date: 'date', timestamptz: 'timestamptz', jsonb: 'jsonb',
-};
 
 @Component({
   selector: 'qd-table-schema',
@@ -77,12 +71,15 @@ export class TableSchemaComponent {
     const table = this.snapshot();
     if (!table) return [];
     const fields: SchemaFieldRow[] = table.fields.map((field) => ({
+      sourceName: field.name,
+      operationName: null,
+      canEdit: field.editable,
       name: field.name,
-      dataType: field.dataType,
+      dataType: field.editableType ?? field.dataType,
       typeDetails: field.characterMaximumLength !== null
-        ? `(${field.characterMaximumLength})`
+        ? String(field.characterMaximumLength)
         : field.dataType === 'numeric' && field.numericPrecision !== null
-          ? `(${field.numericPrecision}${field.numericScale !== null ? `, ${field.numericScale}` : ''})`
+          ? `${field.numericPrecision}${field.numericScale !== null ? `, ${field.numericScale}` : ''}`
           : '',
       typeIdentity: `${field.typeSchema}.${field.typeName}`,
       nullable: field.nullable ? 'YES' : 'NO',
@@ -102,22 +99,38 @@ export class TableSchemaComponent {
     if (!pending || !connection || !sameTarget(pending.target, connection.target)
       || pending.schema !== table.schema || pending.table !== table.name) return fields;
 
-    const existingNames = new Set(fields.map(({ name }) => name));
     for (const operation of pending.operations) {
-      if (existingNames.has(operation.name)) continue;
-      fields.push({
-        name: operation.name,
-        dataType: fieldTypeLabels[operation.type],
-        typeDetails: '',
-        typeIdentity: `pg_catalog.${fieldTypeNames[operation.type]}`,
-        nullable: 'YES',
-        defaultValue: '—',
-        isUncommitted: true,
-        isGridInput: false,
-        editedFields: [],
-        status: 'UNCOMMITTED',
-      });
-      existingNames.add(operation.name);
+      if (operation.kind === 'addNullableField') {
+        if (fields.some(({ operationName }) => operationName === operation.name)
+          || fields.some(({ sourceName }) => sourceName === operation.name)) continue;
+        fields.push({
+          sourceName: null,
+          operationName: operation.name,
+          canEdit: true,
+          name: operation.name,
+          dataType: operation.type,
+          typeDetails: fieldTypeDetails(operation),
+          typeIdentity: this.typeIdentity(table, operation.type),
+          nullable: 'YES',
+          defaultValue: operation.defaultExpression ?? '—',
+          isUncommitted: true,
+          isGridInput: false,
+          editedFields: [],
+          status: 'UNCOMMITTED',
+        });
+      } else {
+        const field = fields.find(({ sourceName }) => sourceName === operation.name);
+        if (!field) continue;
+        field.operationName = operation.name;
+        field.canEdit = true;
+        field.name = operation.newName;
+        field.dataType = operation.type;
+        field.typeDetails = fieldTypeDetails(operation);
+        field.typeIdentity = this.typeIdentity(table, operation.type);
+        field.defaultValue = operation.defaultExpression ?? '—';
+        field.isUncommitted = true;
+        field.status = 'UNCOMMITTED';
+      }
     }
     return fields;
   });
@@ -129,7 +142,7 @@ export class TableSchemaComponent {
   readonly constraintDatasource = new AgridDataSource<SchemaConstraintRow>();
   readonly editableFieldGridProvider: AgridProvider<SchemaFieldRow>;
   readonly readonlyFieldGridProvider: AgridProvider<SchemaFieldRow>;
-  readonly fieldGridProvider = computed(() => this.snapshot()?.canAlter
+  readonly fieldGridProvider = computed(() => this.snapshot()?.canAlter && !this.stagingField()
     ? this.editableFieldGridProvider
     : this.readonlyFieldGridProvider);
   readonly constraintGridProvider: AgridProvider<SchemaConstraintRow>;
@@ -137,18 +150,8 @@ export class TableSchemaComponent {
   readonly error = signal<string | null>(null);
   readonly stagingField = signal(false);
   readonly stageError = signal<string | null>(null);
-  readonly fieldTypes: { value: NullableFieldType; label: string }[] = [
-    { value: 'text', label: 'Text' },
-    { value: 'integer', label: 'Integer' },
-    { value: 'bigint', label: 'Big integer' },
-    { value: 'numeric', label: 'Numeric' },
-    { value: 'boolean', label: 'Boolean' },
-    { value: 'uuid', label: 'UUID' },
-    { value: 'date', label: 'Date' },
-    { value: 'timestamptz', label: 'Timestamp with time zone' },
-    { value: 'jsonb', label: 'JSON' },
-  ];
-  readonly fieldTypeOptions = this.fieldTypes.map(({ value, label }) => ({ value, label }));
+  readonly fieldTypeOptions = computed(() => (this.snapshot()?.editableFieldTypes ?? [])
+    .map(({ value, label }) => ({ value, label })));
 
   constructor() {
     const columns = this.makeFieldColumns();
@@ -188,6 +191,7 @@ export class TableSchemaComponent {
       emptyText: 'No constraints are visible for this resource.',
     });
     effect(() => this.fieldDatasource.setData(this.displayFields()));
+    effect(() => this.editableFieldGridProvider.columns.set(this.makeFieldColumns()));
     effect(() => this.constraintDatasource.setData(this.displayConstraints()));
     effect(() => {
       const [params, query] = this.routeState();
@@ -222,7 +226,12 @@ export class TableSchemaComponent {
   prepareFieldDraft(event: NewRecord<SchemaFieldRow>): void {
     event.datasource.updateRow(event.index, {
       ...event.data,
-      dataType: 'text',
+      sourceName: null,
+      operationName: null,
+      canEdit: true,
+      name: '',
+      dataType: this.snapshot()?.editableFieldTypes[0]?.value ?? '',
+      typeDetails: '',
       nullable: 'YES',
       defaultValue: '—',
       isUncommitted: false,
@@ -234,9 +243,10 @@ export class TableSchemaComponent {
   }
 
   onFieldCellEdit(event: GridEditEvent<SchemaFieldRow>): void {
-    if (event.field !== 'name' && event.field !== 'dataType') return;
+    if (!['name', 'dataType', 'typeDetails', 'defaultValue'].includes(event.field)) return;
     const row = this.fieldDatasource.rows()[event.position.rowIndex];
-    if (!row?.isGridInput) return;
+    if (!row || (!row.isGridInput && !row.isUncommitted && !row.canEdit)) return;
+    this.stageError.set(null);
     const editedFields = [...new Set([...row.editedFields, event.field])];
     this.fieldDatasource.patchRow(event.position.rowIndex, {
       editedFields,
@@ -246,40 +256,27 @@ export class TableSchemaComponent {
     });
   }
 
-  onFieldRecordEdit(event: RowUpdateEvent<SchemaFieldRow>): void {
-    const row = event.row
-    if (!row.isGridInput || !row.dataType || !row.name)
-      {
-          console.error("Missing mandatory fields",row.isGridInput ,row.dataType,row.name);
-        return;
-      }
-    console.log("Staging Grid Field")
-    void this.stageGridField(row.name, row.dataType);
+  onFieldRecordEdit(event: RecordEditEvent<SchemaFieldRow>): void {
+    const row = event.data;
+    if (!row.isGridInput && !row.isUncommitted && !row.editedFields.length) return;
+    void this.stageGridField(row);
   }
 
-  private async stageGridField(rawName: string, rawType: string): Promise<void> {
+  private async stageGridField(row: SchemaFieldRow): Promise<void> {
     const connection = this.connections.activeConnection();
     const snapshot = this.snapshot();
-    const name = rawName.trim();
     this.stageError.set(null);
     if (this.stagingField() || !connection || !snapshot?.canAlter) return;
-    if (!/^[\p{L}_][\p{L}\p{N}_$]*$/u.test(name)) {
-      this.stageError.set('Use a PostgreSQL identifier: start with a letter or underscore, then use letters, numbers, underscores, or $.');
-      return;
-    }
-    if (!this.fieldTypes.some(({ value }) => value === rawType)) {
-      this.stageError.set('Choose a supported PostgreSQL field type from the grid.');
-      return;
-    }
-
-    const operation: AddNullableFieldOperation = {
-      kind: 'addNullableField',
-      name,
-      type: rawType as NullableFieldType,
-    };
     this.stagingField.set(true);
     try {
-      await this.runbook.stageAddNullableField(connection, snapshot, operation);
+      const draft: SchemaFieldDraftRequest['draft'] = {
+        sourceName: row.sourceName,
+        name: row.name,
+        type: row.dataType,
+        typeDetails: row.typeDetails,
+        defaultValue: row.defaultValue,
+      };
+      await this.runbook.stageSchemaFieldDraft(connection, snapshot, draft, row.operationName ?? row.sourceName ?? row.name);
     } catch (error) {
       this.stageError.set(error instanceof Error ? error.message : 'Unable to stage this field.');
     } finally {
@@ -291,17 +288,19 @@ export class TableSchemaComponent {
     return [
       {
         field: 'name', header: 'Name', width: 220, editable: true,
-        cellReadonly: (params: CellReadonlyParams<SchemaFieldRow>) => !params.row.isGridInput,
+        cellReadonly: (params: CellReadonlyParams<SchemaFieldRow>) => !params.row.isGridInput && !params.row.canEdit,
       },
       {
         field: 'dataType', header: 'Type', width: 210, editable: true,
-        values: this.fieldTypeOptions,
-        cellReadonly: (params: CellReadonlyParams<SchemaFieldRow>) => !params.row.isGridInput,
+        values: this.fieldTypeOptions(),
+        cellReadonly: (params: CellReadonlyParams<SchemaFieldRow>) => !params.row.isGridInput && !params.row.canEdit,
       },
-      { field: 'typeDetails', header: 'Size', width: 100, editable: false, locked: true },
+      { field: 'typeDetails', header: 'Size / precision', width: 130, editable: true,
+        cellReadonly: (params: CellReadonlyParams<SchemaFieldRow>) => !params.row.isGridInput && !params.row.canEdit },
       { field: 'typeIdentity', header: 'Type schema', width: 160, editable: false, locked: true },
       { field: 'nullable', header: 'Nullable', width: 110, cellRendererComponent: SchemaBadgeCellComponent, editable: false, locked: true },
-      { field: 'defaultValue', header: 'Default / generation', width: 260, editable: false, locked: true },
+      { field: 'defaultValue', header: 'Default / generation', width: 260, editable: true,
+        cellReadonly: (params: CellReadonlyParams<SchemaFieldRow>) => !params.row.isGridInput && !params.row.canEdit },
       { field: 'status', header: 'Status', width: 190, cellRendererComponent: SchemaBadgeCellComponent, editable: false, locked: true },
     ];
   }
@@ -314,6 +313,11 @@ export class TableSchemaComponent {
       { field: 'definition', header: 'Definition', width: 380, locked: true },
       { field: 'references', header: 'References', width: 240, locked: true },
     ];
+  }
+
+  private typeIdentity(snapshot: TableSnapshot, type: string): string {
+    const descriptor = snapshot.editableFieldTypes.find((item) => item.value === type);
+    return descriptor ? `${descriptor.typeSchema}.${descriptor.typeName}` : type;
   }
 
   private toConstraintRow(constraint: TableConstraintDescriptor): SchemaConstraintRow {
@@ -334,3 +338,5 @@ function sameTarget(left: { adapter: string; host: string; port: number; databas
   return left.adapter === right.adapter && left.host === right.host && left.port === right.port
     && left.database === right.database && left.username === right.username;
 }
+
+function fieldTypeDetails(operation: SchemaOperation): string { return operation.typeDetails ?? ''; }

@@ -19,6 +19,7 @@ import type { Request, Response } from 'express';
 import {
   migrationApplyRequestSchema,
   migrationPreviewRequestSchema,
+  schemaFieldDraftRequestSchema,
   postgresConnectRequestSchema,
   type ConnectResponse,
 } from '@querydock/contracts';
@@ -99,9 +100,8 @@ export class ConnectionsController {
     @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
   ) {
-    if (typeof schema !== 'string' || schema.length < 1 || schema.length > 63
-      || typeof table !== 'string' || table.length < 1 || table.length > 63) {
-      throw new BadRequestException('Provide a valid schema and table name.');
+    if (typeof schema !== 'string' || typeof table !== 'string') {
+      throw new BadRequestException('Provide a schema and table name.');
     }
 
     const configuration = this.sessions.requireConnection(request, response, connectionId);
@@ -111,6 +111,7 @@ export class ConnectionsController {
       return snapshot;
     } catch (error) {
       if (error instanceof NotFoundException) throw error;
+      if (error instanceof MigrationPlanError) throw this.asMigrationException(error);
       throw this.asSafeDatabaseException(error);
     }
   }
@@ -128,6 +129,24 @@ export class ConnectionsController {
     const configuration = this.sessions.requireConnection(request, response, connectionId);
     try {
       return await this.postgres.previewMigration(configuration, parsed.data);
+    } catch (error) {
+      throw this.asMigrationException(error);
+    }
+  }
+
+  @Post(':connectionId/migrations/field-draft')
+  @HttpCode(200)
+  async previewSchemaFieldDraft(
+    @Param('connectionId') connectionId: string,
+    @Body() body: unknown,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const parsed = schemaFieldDraftRequestSchema.safeParse(body);
+    if (!parsed.success) throw new BadRequestException('Invalid schema field draft request.');
+    const configuration = this.sessions.requireConnection(request, response, connectionId);
+    try {
+      return await this.postgres.previewSchemaFieldDraft(configuration, parsed.data);
     } catch (error) {
       throw this.asMigrationException(error);
     }

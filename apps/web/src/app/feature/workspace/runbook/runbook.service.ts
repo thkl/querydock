@@ -1,10 +1,11 @@
 import { computed, Injectable, inject, signal } from '@angular/core';
 import type {
-  AddNullableFieldOperation,
   ConnectResponse,
   ConnectionTarget,
   MigrationApplyRequest,
   MigrationPreviewResponse,
+  SchemaFieldDraftRequest,
+  SchemaOperation,
   TableSnapshot,
 } from '@querydock/contracts';
 import { ApiRequestError, ConnectionApiService } from '../connections/connection-api.service';
@@ -14,7 +15,7 @@ export interface SchemaRunbook {
   schema: string;
   table: string;
   baseline: TableSnapshot;
-  operations: AddNullableFieldOperation[];
+  operations: SchemaOperation[];
   preview: MigrationPreviewResponse | null;
   appliedBatches: { statements: string[]; appliedAt: string }[];
   applyOutcomeUnknown: boolean;
@@ -57,10 +58,11 @@ export class RunbookService {
   readonly appliedStatements = computed(() => this.runbook()?.appliedBatches.flatMap(({ statements }) => statements) ?? []);
   readonly ready = this.restore();
 
-  async stageAddNullableField(
+  async stageSchemaFieldDraft(
     connection: ConnectResponse,
     snapshot: TableSnapshot,
-    operation: AddNullableFieldOperation,
+    draft: SchemaFieldDraftRequest['draft'],
+    replacementName: string | null = null,
   ): Promise<void> {
     await this.ready;
     this.error.set(null);
@@ -74,17 +76,29 @@ export class RunbookService {
     }
 
     const baseline = current?.baseline ?? snapshot;
-    const operations = [...(current?.operations ?? []), operation];
-    const plan = {
+    const key = draft.sourceName ?? replacementName ?? draft.name;
+    const matches = (candidate: SchemaOperation): boolean => candidate.name === key;
+    const retained = (current?.operations ?? []).filter((candidate) => !matches(candidate));
+    const request: SchemaFieldDraftRequest = {
       schema: baseline.schema,
       table: baseline.name,
       baselineFingerprint: baseline.fingerprint,
-      operations,
+      operations: retained,
+      draft,
     };
 
     this.previewing.set(true);
     try {
-      const preview = await this.connections.previewMigration(connection.connectionId, plan);
+      const fieldPreview = await this.connections.previewSchemaFieldDraft(connection.connectionId, request);
+      if (!fieldPreview.operations.length) {
+        if (current) {
+          const updated = { ...current, operations: [], preview: null };
+          this.runbook.set(updated);
+          await this.persist(updated);
+        }
+        return;
+      }
+      const { operations, ...preview } = fieldPreview;
       const runbook: SchemaRunbook = {
         target: connection.target,
         schema: baseline.schema,
@@ -105,7 +119,7 @@ export class RunbookService {
     }
   }
 
-  async applyPending(): Promise<void> {
+  async applyPending(acknowledgedWarnings: string[] = []): Promise<void> {
     await this.ready;
     const current = this.runbook();
     if (!current?.preview || !current.operations.length) throw new Error('There is no reviewed SQL to apply.');
@@ -119,6 +133,7 @@ export class RunbookService {
       baselineFingerprint: current.baseline.fingerprint,
       operations: current.operations,
       reviewedStatements: current.preview.statements,
+      acknowledgedWarnings,
     };
     this.applying.set(true);
     this.error.set(null);
@@ -193,11 +208,12 @@ export class RunbookService {
     if (outcome === 'applied') {
       const actualFields = new Map(snapshot.fields.map((field) => [field.name, field]));
       const allFieldsPresent = current.operations.every((operation) => {
-        const field = actualFields.get(operation.name);
-        return field?.nullable && field.dataType === databaseTypeFor(operation.type);
+        const expectedName = operation.kind === 'alterField' ? operation.newName : operation.name;
+        const field = actualFields.get(expectedName);
+        return field !== undefined && operationMatchesField(field, operation);
       });
       if (!allFieldsPresent) {
-        throw new Error('The database does not contain every field from this batch with the expected nullable type. Keep the outcome unknown and inspect it manually.');
+        throw new Error('The database does not contain every field change from this batch with the expected type and default. Keep the outcome unknown and inspect it manually.');
       }
       const updated: SchemaRunbook = {
         ...current,
@@ -316,18 +332,17 @@ function isUncertainApplyError(error: unknown): boolean {
   return !(error instanceof ApiRequestError) || error.status === null || error.status >= 500;
 }
 
-function databaseTypeFor(type: AddNullableFieldOperation['type']): string {
-  switch (type) {
-    case 'timestamptz': return 'timestamp with time zone';
-    case 'text': return 'text';
-    case 'integer': return 'integer';
-    case 'bigint': return 'bigint';
-    case 'numeric': return 'numeric';
-    case 'boolean': return 'boolean';
-    case 'uuid': return 'uuid';
-    case 'date': return 'date';
-    case 'jsonb': return 'jsonb';
-  }
+function operationMatchesField(
+  field: TableSnapshot['fields'][number],
+  operation: SchemaOperation,
+): boolean {
+  const typeMatches = field.editableType === operation.type
+    && field.characterMaximumLength === (operation.characterMaximumLength ?? null)
+    && field.numericPrecision === (operation.numericPrecision ?? null)
+    && field.numericScale === (operation.numericScale ?? null);
+  const defaultExpression = operation.defaultExpression?.trim() ?? null;
+  return typeMatches && (field.defaultExpression?.trim() ?? null) === defaultExpression
+    && (operation.kind === 'alterField' || field.nullable);
 }
 
 function requestResult<T>(request: IDBRequest<T>): Promise<T> {

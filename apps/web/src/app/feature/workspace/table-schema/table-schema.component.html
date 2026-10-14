@@ -40,7 +40,7 @@
           <h2 id="fields-title">Fields</h2>
           <p>{{ displayFields().length }} {{ displayFields().length === 1 ? 'field' : 'fields' }}</p>
           @if (table.canAlter) {
-            <p class="fields-instructions">Use <strong>Add row</strong> at the bottom of the grid, then enter a name and type to stage a nullable field.</p>
+            <p class="fields-instructions">Use <strong>Add row</strong> to add a nullable field, or edit a supported field’s name, type, size, or default. Drafts appear in the runbook for review.</p>
           }
         </div>
         <span class="metadata-label">{{ uncommittedFieldCount() ? 'BASELINE + DRAFTS' : 'CURRENT STRUCTURE' }}</span>
@@ -48,15 +48,19 @@
       @if (stageError()) {
         <p class="stage-error" role="alert">{{ stageError() }}</p>
       }
+      @if (stagingField()) {
+        <p class="stage-progress" role="status">Updating the runbook preview…</p>
+      }
       @if (uncommittedFieldCount()) {
-        <p class="draft-caption"><span class="draft-marker"></span> Pending fields are saved in the runbook and have not been applied.</p>
+        <p class="draft-caption"><span class="draft-marker"></span> Pending field changes are saved in the runbook and have not been applied.</p>
       }
       <div class="schema-grid schema-grid--fields">
         <agrid [provider]="fieldGridProvider()"
           (prepareAddRecord)="prepareFieldDraft($event)"
           (cellEdit)="onFieldCellEdit($event)"
-          (rowChanged)="onFieldRecordEdit($event)" />
+          (recordEdit)="onFieldRecordEdit($event)" />
       </div>
+      <p class="fields-instructions fields-instructions--detail">Type parameters and defaults are checked by the connected database. Enter the parameters supported for the selected type; enter — to remove a default.</p>
       @if (!runbook.storageAvailable()) {
         <p class="storage-warning" role="status">Browser storage is unavailable. Runbook changes will not survive a reload.</p>
       }
