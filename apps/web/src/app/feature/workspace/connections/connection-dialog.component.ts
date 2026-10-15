@@ -67,7 +67,7 @@ export class ConnectionDialogComponent {
       database: String(values.get('database') ?? '').trim(),
       username: String(values.get('username') ?? '').trim(),
       password: String(values.get('password') ?? ''),
-      sslMode: String(values.get('sslMode') ?? 'disable') as PostgresConnectRequest['sslMode'],
+      sslMode: String(values.get('sslMode') ?? 'require') as PostgresConnectRequest['sslMode'],
     };
     const saveInVault = values.get('saveInVault') === 'on';
     const connected = await this.state.connect(configuration, !saveInVault);

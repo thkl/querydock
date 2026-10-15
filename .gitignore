@@ -12,3 +12,4 @@ graphify-out/
 .impeccable
 .vscode
 .DS_Store
+docs/security-review.md

@@ -565,6 +565,7 @@ export class PostgresAdapter {
     configuration: PostgresConnectRequest,
     action: (client: Client) => Promise<T>,
   ): Promise<T> {
+    this.assertDatabaseHostAllowed(configuration.host);
     const client = new Client({
       host: configuration.host,
       port: configuration.port,
@@ -597,6 +598,29 @@ export class PostgresAdapter {
       await client.end().catch(() => undefined);
     }
   }
+
+  private assertDatabaseHostAllowed(host: string): void {
+    const configuredHosts = process.env['QUERYDOCK_ALLOWED_DATABASE_HOSTS']?.trim();
+    if (!configuredHosts) return;
+
+    const allowedHosts = new Set(
+      configuredHosts.split(',').map(normalizeDatabaseHost).filter(Boolean),
+    );
+    if (!allowedHosts.has(normalizeDatabaseHost(host))) {
+      throw new PostgresConnectionError(
+        'The requested PostgreSQL host is not included in QUERYDOCK_ALLOWED_DATABASE_HOSTS.',
+        'This database host is not allowed by the server configuration.',
+      );
+    }
+  }
+}
+
+function normalizeDatabaseHost(host: string): string {
+  const normalized = host.trim().toLowerCase();
+  const unbracketed = normalized.startsWith('[') && normalized.endsWith(']')
+    ? normalized.slice(1, -1)
+    : normalized;
+  return unbracketed.replace(/\.$/, '');
 }
 
 async function assertNewTableTarget(client: Client, schema: string, table: string, ifNotExists = false): Promise<void> {

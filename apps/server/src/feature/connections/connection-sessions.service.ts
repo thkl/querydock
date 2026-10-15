@@ -65,7 +65,7 @@ export class ConnectionSessionsService implements OnModuleInit, OnModuleDestroy 
     const session = this.sessions.get(sessionId);
     if (!session || session.expiresAt <= Date.now()) {
       this.sessions.delete(sessionId);
-      this.clearSessionCookie(response);
+      this.clearSessionCookie(request, response);
       return [];
     }
 
@@ -83,7 +83,7 @@ export class ConnectionSessionsService implements OnModuleInit, OnModuleDestroy 
     const session = sessionId ? this.sessions.get(sessionId) : undefined;
     if (!session || session.expiresAt <= Date.now()) {
       if (sessionId) this.sessions.delete(sessionId);
-      this.clearSessionCookie(response);
+      this.clearSessionCookie(request, response);
       throw new UnauthorizedException('Database session expired. Reconnect to continue.');
     }
 
@@ -100,7 +100,7 @@ export class ConnectionSessionsService implements OnModuleInit, OnModuleDestroy 
     const session = sessionId ? this.sessions.get(sessionId) : undefined;
     if (!session || session.expiresAt <= Date.now()) {
       if (sessionId) this.sessions.delete(sessionId);
-      this.clearSessionCookie(response);
+      this.clearSessionCookie(request, response);
       throw new UnauthorizedException('Database session expired. Reconnect to continue.');
     }
     if (!session.connections.delete(connectionId)) {
@@ -108,7 +108,7 @@ export class ConnectionSessionsService implements OnModuleInit, OnModuleDestroy 
     }
     if (session.connections.size === 0) {
       this.sessions.delete(sessionId!);
-      this.clearSessionCookie(response);
+      this.clearSessionCookie(request, response);
       return;
     }
     this.touchSession(session);
@@ -150,18 +150,26 @@ export class ConnectionSessionsService implements OnModuleInit, OnModuleDestroy 
   }
 
   private writeSessionCookie(request: Request, response: Response, sessionId: string): void {
-    const secure = request.secure ? '; Secure' : '';
+    const secure = this.useSecureCookie(request) ? '; Secure' : '';
     response.setHeader(
       'Set-Cookie',
       `${SESSION_COOKIE}=${sessionId}; Path=/api; HttpOnly; SameSite=Strict; Max-Age=${SESSION_TTL_MS / 1000}${secure}`,
     );
   }
 
-  private clearSessionCookie(response: Response): void {
+  private clearSessionCookie(request: Request, response: Response): void {
+    const secure = this.useSecureCookie(request) ? '; Secure' : '';
     response.setHeader(
       'Set-Cookie',
-      `${SESSION_COOKIE}=; Path=/api; HttpOnly; SameSite=Strict; Max-Age=0`,
+      `${SESSION_COOKIE}=; Path=/api; HttpOnly; SameSite=Strict; Max-Age=0${secure}`,
     );
+  }
+
+  private useSecureCookie(request: Request): boolean {
+    const configured = process.env['QUERYDOCK_COOKIE_SECURE']?.trim().toLowerCase();
+    if (configured === 'true') return true;
+    if (configured === 'false') return false;
+    return request.secure || process.env['NODE_ENV'] === 'production';
   }
 
   private removeExpiredSessions(): void {

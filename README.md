@@ -18,16 +18,17 @@ The Angular app runs on `http://localhost:4200`. The NestJS API runs on `http://
 
 ## Docker Compose and Traefik
 
-The production image contains one NestJS server process. It serves the built Angular app, falls back to `index.html` for client routes, and handles API requests under `/api`.
+The production image contains one NestJS server process. It serves the built Angular app, falls back to `index.html` for client routes, and handles API requests under `/api`. In development, the API listens on `127.0.0.1`; the container listens on its private container interface.
 
-Connect QueryDock to the same Docker network as Traefik, then build and start it:
+Build and start the local instance:
 
 ```sh
-docker network create traefik # only if the network does not already exist
-QUERYDOCK_HOST=querydock.example.com docker compose up --build -d
+docker compose up --build -d
 ```
 
-Compose attaches to the external `traefik` network and adds Docker-provider labels for the `websecure` entrypoint and `letsencrypt` certificate resolver. Set `TRAEFIK_DOCKER_NETWORK`, `TRAEFIK_ENTRYPOINT`, `TRAEFIK_CERT_RESOLVER`, or `TRAEFIK_TLS` to match your Traefik setup. The app also publishes port 8080 by default for direct access; set `QUERYDOCK_HTTP_PORT` to change it.
+The published port binds to `127.0.0.1:8080` by default. Set `QUERYDOCK_HTTP_PORT` to change the port. The Nest server marks session cookies `Secure` in production; set `QUERYDOCK_COOKIE_SECURE=false` only for an intentional plain-HTTP local setup where the browser does not treat localhost as secure.
+
+For Traefik or another reverse proxy, attach QueryDock to a private network reachable only by the proxy, configure TLS and an access gateway, and avoid exposing the API directly to untrusted networks. This Compose file does not configure Traefik routes or authentication. If your proxy must reach the published host port, set `QUERYDOCK_HTTP_BIND_ADDRESS=0.0.0.0` and `QUERYDOCK_ALLOWED_DATABASE_HOSTS` to a comma-separated exact host allowlist (for example, `db.internal,host.docker.internal`). A non-loopback bind fails at startup without the allowlist; unlisted hosts are rejected before PostgreSQL connects. Leave the allowlist unset only for a loopback-only self-hosted instance where the operator needs to choose database hosts dynamically.
 
 Compose does not start a database; QueryDock connects to databases selected in the app. For a database running on the Docker host, use `host.docker.internal` as its host from the container. Stop QueryDock with `docker compose down`.
 
