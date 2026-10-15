@@ -46,4 +46,12 @@ export class WorkspaceSidebarComponent {
     const connectionId = this.connections.activeConnectionId();
     if (connectionId) this.pages.openTableSchema(connectionId, schema, table);
   }
+
+  openDataView(schema: string, table: string): void {
+    const connection = this.connections.activeConnection();
+    if (connection && table && connection.capabilities.browseData) {
+      this.pages.openTableData(connection.connectionId, schema, table);
+    }
+
+  }
 }

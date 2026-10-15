@@ -23,6 +23,13 @@ export const routes: Routes = [
           ),
       },
       {
+        path: 'tables/:tableName/data',
+        loadComponent: () =>
+          import('./feature/workspace/table-data/table-data.component').then(
+            (component) => component.TableDataComponent,
+          ),
+      },
+      {
         path: 'tables/:tableName/schema',
         loadComponent: () =>
           import('./feature/workspace/table-schema/table-schema.component').then(

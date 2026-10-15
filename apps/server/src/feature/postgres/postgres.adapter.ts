@@ -18,6 +18,8 @@ import type {
   TableConstraintDescriptor,
   TableFieldDescriptor,
   TableSnapshot,
+  TableDataQueryRequest,
+  TableDataQueryResponse,
 } from '@querydock/contracts';
 
 interface ResourceRow {
@@ -166,6 +168,66 @@ export class PostgresAdapter {
     validatePostgresIdentifier(schema, 'schema');
     validatePostgresIdentifier(table, 'table');
     return this.withClient(configuration, (client) => this.inspectTableWithClient(client, schema, table));
+  }
+
+  async queryTableData(
+    configuration: PostgresConnectRequest,
+    schema: string,
+    table: string,
+    request: TableDataQueryRequest,
+  ): Promise<TableDataQueryResponse> {
+    validatePostgresIdentifier(schema, 'schema');
+    validatePostgresIdentifier(table, 'table');
+    return this.withClient(configuration, async (client) => {
+      await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+      try {
+        await client.query("SET LOCAL statement_timeout = '5000ms'");
+        const snapshot = await this.inspectTableWithClient(client, schema, table);
+        if (!snapshot) throw new MigrationPlanError('not-found', 'The requested table was not found or is not visible to this user.');
+        const fieldNames = new Set(snapshot.fields.map(({ name }) => name));
+        for (const sort of request.sort) {
+          if (!fieldNames.has(sort.field)) throw new MigrationPlanError('invalid', `The sort field "${sort.field}" is not part of this table. Refresh the table and try again.`);
+        }
+        for (const filter of request.filters) {
+          if (!fieldNames.has(filter.field)) throw new MigrationPlanError('invalid', `The filter field "${filter.field}" is not part of this table. Refresh the table and try again.`);
+          validateTableDataFilter(filter);
+        }
+
+        const values: unknown[] = [];
+        const predicates = request.filters.map((filter) => buildTableDataPredicate(filter, values));
+        const quickFilter = request.quickFilter.trim();
+        if (quickFilter) {
+          const parameter = `$${values.push(`%${escapeLikePattern(quickFilter)}%`)}`;
+          predicates.push(`(${snapshot.fields.map(({ name }) => `${quoteIdentifier(name)}::text ILIKE ${parameter} ESCAPE '!'`).join(' OR ')})`);
+        }
+        const where = predicates.length ? ` WHERE ${predicates.join(' AND ')}` : '';
+        const count = await client.query<{ total: string }>(
+          `SELECT count(*)::text AS total FROM ${quoteIdentifier(schema)}.${quoteIdentifier(table)}${where}`,
+          values,
+        );
+        const totalRows = Number(count.rows[0]?.total ?? '0');
+        if (!Number.isSafeInteger(totalRows)) throw new MigrationPlanError('invalid', 'This table has too many rows to browse safely in the current grid.');
+
+        const order = buildTableDataOrder(snapshot, request.sort);
+        const pageValues = [...values, request.limit, request.offset];
+        const select = snapshot.fields
+          .map(({ name }) => `${quoteIdentifier(name)}::text AS ${quoteIdentifier(name)}`)
+          .join(', ');
+        const result = await client.query<Record<string, string | null>>(
+          `SELECT ${select} FROM ${quoteIdentifier(schema)}.${quoteIdentifier(table)}${where} ORDER BY ${order} LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
+          pageValues,
+        );
+        await client.query('COMMIT');
+        return {
+          columns: snapshot.fields.map(({ ordinalPosition, name, dataType, nullable }) => ({ ordinalPosition, name, dataType, nullable })),
+          rows: result.rows,
+          totalRows,
+        };
+      } catch (error) {
+        await client.query('ROLLBACK').catch(() => undefined);
+        throw error;
+      }
+    });
   }
 
   async foreignKeyFieldChoices(
@@ -1299,6 +1361,60 @@ function validateDefaultExpression(expression: string): string {
 
 function quoteIdentifier(identifier: string): string {
   return `"${identifier.replaceAll('"', '""')}"`;
+}
+
+type TableDataFilter = TableDataQueryRequest['filters'][number];
+
+function validateTableDataFilter(filter: TableDataFilter): void {
+  if (filter.operator === 'between' && (filter.value === undefined || filter.secondValue === undefined)) {
+    throw new MigrationPlanError('invalid', `The "between" filter for "${filter.field}" needs both a start and end value.`);
+  }
+  if (filter.operator === 'in' && !filter.values?.length) {
+    throw new MigrationPlanError('invalid', `Choose one or more values for the "${filter.field}" filter.`);
+  }
+  if (!['isNull', 'isNotNull', 'in'].includes(filter.operator) && filter.value === undefined) {
+    throw new MigrationPlanError('invalid', `Enter a value for the "${filter.field}" filter.`);
+  }
+}
+
+function buildTableDataPredicate(filter: TableDataFilter, values: unknown[]): string {
+  const field = quoteIdentifier(filter.field);
+  const textField = `${field}::text`;
+  if (filter.operator === 'isNull') return `${quoteIdentifier(filter.field)} IS NULL`;
+  if (filter.operator === 'isNotNull') return `${quoteIdentifier(filter.field)} IS NOT NULL`;
+  if (filter.operator === 'in') {
+    const parameter = `$${values.push(filter.values)}`;
+    return `${textField} = ANY(${parameter}::text[])`;
+  }
+  if (filter.operator === 'between') {
+    const first = `$${values.push(filter.value)}`;
+    const second = `$${values.push(filter.secondValue)}`;
+    return `${field} BETWEEN ${first} AND ${second}`;
+  }
+  const operatorSql: Partial<Record<TableDataFilter['operator'], string>> = {
+    eq: '=', neq: '<>', gt: '>', gte: '>=', lt: '<', lte: '<=',
+  };
+  const comparison = operatorSql[filter.operator];
+  if (comparison) return `${field} ${comparison} $${values.push(filter.value)}`;
+  const pattern = escapeLikePattern(filter.value ?? '');
+  const patternValue = filter.operator === 'contains' || filter.operator === 'notContains'
+    ? `%${pattern}%`
+    : filter.operator === 'startsWith' ? `${pattern}%` : `%${pattern}`;
+  const sqlOperator = filter.operator === 'notContains' ? 'NOT ILIKE' : 'ILIKE';
+  return `${textField} ${sqlOperator} $${values.push(patternValue)} ESCAPE '!'`;
+}
+
+function escapeLikePattern(value: string): string {
+  return value.replaceAll('!', '!!').replaceAll('%', '!%').replaceAll('_', '!_');
+}
+
+function buildTableDataOrder(snapshot: TableSnapshot, requested: TableDataQueryRequest['sort']): string {
+  const ordered = new Map<string, 'ASC' | 'DESC'>();
+  for (const item of requested) ordered.set(item.field, item.direction === 'desc' ? 'DESC' : 'ASC');
+  const primaryKey = snapshot.constraints.find(({ kind }) => kind === 'primaryKey')?.fieldNames ?? [];
+  const stableFields = primaryKey.length ? primaryKey : snapshot.fields.map(({ name }) => name);
+  for (const name of stableFields) if (!ordered.has(name)) ordered.set(name, 'ASC');
+  return [...ordered].map(([name, direction]) => `${quoteIdentifier(name)} ${direction}`).join(', ');
 }
 
 type CheckToken = { kind: 'identifier' | 'number' | 'string' | 'operator' | 'punctuation'; value: string; quoted?: boolean };

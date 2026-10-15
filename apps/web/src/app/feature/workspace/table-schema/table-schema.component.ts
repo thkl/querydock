@@ -403,6 +403,14 @@ export class TableSchemaComponent {
     }
   }
 
+  openDataView(): void {
+    const connection = this.connections.activeConnection();
+    const table = this.snapshot();
+    if (connection && table && connection.capabilities.browseData) {
+      this.workspacePages.openTableData(connection.connectionId, table.schema, table.name);
+    }
+  }
+
   prepareConstraintDraft(event: NewRecord<SchemaConstraintRow>): void {
     const firstKind = this.snapshot()?.editableConstraintKinds[0]?.value ?? 'unique';
     event.datasource.updateRow(event.index, {

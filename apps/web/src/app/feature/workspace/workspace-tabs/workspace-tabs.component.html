@@ -10,6 +10,16 @@
           (click)="closePage($event, page)">×</button>
       </div>
     }
+    @for (page of pages.dataPages(); track page.id) {
+      <div #pageTab class="page-tab" [class.current]="pages.activeDataPage()?.id === page.id" [attr.data-page-id]="page.id">
+        <a class="work-tab page-tab-link" [class.current]="pages.activeDataPage()?.id === page.id"
+          [routerLink]="page.route" [title]="page.title" (click)="pages.selectDataPage(page)">
+          <span class="tab-grid-icon" aria-hidden="true">▤</span><span>{{ page.label }}</span>
+        </a>
+        <button class="tab-close" type="button" [attr.aria-label]="'Close ' + page.title" title="Close tab"
+          (click)="closeDataPage($event, page)">×</button>
+      </div>
+    }
     @for (page of pages.createTablePages(); track page.id) {
       <div #pageTab class="page-tab" [class.current]="pages.activeCreateTablePage()?.id === page.id" [attr.data-page-id]="page.id">
         <a class="work-tab page-tab-link" [class.current]="pages.activeCreateTablePage()?.id === page.id"

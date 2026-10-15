@@ -307,6 +307,85 @@
     color: var(--color-muted);
 }
 
+.table-row-grid {
+    display: grid;
+    grid-template-columns: 13px minmax(0, 1fr) 26px 26px;
+    gap: 4px;
+    padding-right: 8px;
+}
+
+.tree-row.table-row-grid {
+    padding-left: 11px;
+}
+
+.table-row-grid > .table-icon {
+    grid-column: 1;
+}
+
+.table-row-grid > button.table-row {
+    grid-column: 2;
+    width: auto;
+    height: 28px;
+    padding: 0 4px;
+}
+
+.table-row-grid > .button-schema-icon {
+    grid-column: 3;
+}
+
+.table-row-grid > .button-browse-icon {
+    grid-column: 4;
+}
+
+.button-browse-icon,
+.button-schema-icon {
+    display: inline-grid;
+    width: 26px;
+    height: 26px;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    border-radius: 5px;
+    background-color: transparent;
+    color: var(--color-muted-light);
+    cursor: pointer;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 120ms ease, background-color 120ms ease, color 120ms ease;
+}
+
+.table-row-grid:hover .button-schema-icon,
+.table-row-grid:hover .button-browse-icon,
+.table-row-grid:focus-within .button-schema-icon,
+.table-row-grid:focus-within .button-browse-icon {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.button-schema-icon:hover,
+.button-browse-icon:hover,
+.button-schema-icon:focus-visible,
+.button-browse-icon:focus-visible {
+    background: var(--color-hover);
+    color: var(--color-accent-strong);
+    outline: none;
+}
+
+@media (hover: none) {
+    .button-schema-icon,
+    .button-browse-icon {
+        opacity: 1;
+        pointer-events: auto;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .button-schema-icon,
+    .button-browse-icon {
+        transition: none;
+    }
+}
+
 
 
 .relationship-tree-row:hover,

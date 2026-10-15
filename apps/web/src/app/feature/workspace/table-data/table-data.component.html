@@ -1,0 +1,34 @@
+<main class="data-workspace">
+  @if (!connections.activeConnection()) {
+    <section class="data-state" role="status">
+      <p class="eyebrow">TABLE DATA</p>
+      <h1>Connect to browse table data</h1>
+      <p>Choose a database connection, then open a table’s structure and select Browse data.</p>
+      <button class="subtle-button" type="button" (click)="connections.openConnectDialog()">Add connection</button>
+    </section>
+  } @else if (!connections.activeConnection()?.capabilities?.browseData) {
+    <section class="data-state" role="status">
+      <p class="eyebrow">TABLE DATA</p>
+      <h1>Data browsing is unavailable</h1>
+      <p>The connected database adapter does not currently support browsing rows.</p>
+    </section>
+  } @else {
+    <header class="data-heading">
+      <div>
+        <p class="eyebrow">TABLE DATA <span class="separator">/</span> {{ routeState()[1].get('schema') ?? 'public' }}</p>
+        <h1>{{ routeState()[0].get('tableName') }}</h1>
+        <p class="page-description">Read-only rows from {{ connections.activeConnection()?.target.database }} · filter and sort in the grid.</p>
+      </div>
+      <button class="subtle-button" type="button" (click)="refresh()">Refresh rows</button>
+    </header>
+    @if (error()) {
+      <p class="data-error" role="alert">{{ error() }}</p>
+    } @else if (!loaded()) {
+      <p class="data-status" role="status">Loading table rows…</p>
+    }
+    <section class="data-grid" aria-label="Read-only table rows">
+      <agrid [provider]="provider()" />
+    </section>
+    <p class="data-footnote">Values are displayed as text to preserve database precision. QueryDock does not save fetched rows in browser storage.</p>
+  }
+</main>

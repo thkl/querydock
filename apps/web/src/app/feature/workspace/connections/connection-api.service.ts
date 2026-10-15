@@ -12,7 +12,10 @@ import type {
   PostgresConnectRequest,
   ResourceDescriptor,
   TableSnapshot,
+  TableDataQueryRequest,
+  TableDataQueryResponse,
 } from '@querydock/contracts';
+import { tableDataQueryResponseSchema } from '@querydock/contracts';
 
 export class ApiRequestError extends Error {
   constructor(message: string, readonly status: number | null) {
@@ -127,6 +130,23 @@ export class ConnectionApiService {
     return request<TableSnapshot>(
       `/api/connections/${encodeURIComponent(connectionId)}/tables?${params.toString()}`,
     );
+  }
+
+  queryTableData(
+    connectionId: string,
+    schema: string,
+    table: string,
+    query: TableDataQueryRequest,
+  ): Promise<TableDataQueryResponse> {
+    const path = [connectionId, 'tables', schema, table, 'data', 'query'].map(encodeURIComponent).join('/');
+    return request<unknown>(`/api/connections/${path}`, {
+      method: 'POST',
+      body: JSON.stringify(query),
+    }).then((payload) => {
+      const parsed = tableDataQueryResponseSchema.safeParse(payload);
+      if (!parsed.success) throw new Error('The server returned an invalid table data response.');
+      return parsed.data;
+    });
   }
 
   async editableFieldTypes(connectionId: string): Promise<EditableFieldTypeDescriptor[]> {

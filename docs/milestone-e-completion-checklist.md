@@ -31,6 +31,8 @@ Use this checklist to decide whether the relationship diagram, connection workfl
 
 ## Data browsing and editing
 
+- [x] **[MANUAL]** Confirm table structure and data actions appear on row hover, remain keyboard reachable, and stay visible on touch devices. The user confirmed this behavior.
+- [ ] **[MANUAL]** Open a table’s Browse data page from its structure view. Confirm it gets a connection-scoped workspace tab, returns to the same table after switching tabs, and re-registers when its route is loaded directly after session restore.
 - [ ] **[MANUAL]** Browse a small and large table. Confirm results are bounded, paging is server-side, filtering/sorting is server-side and stable, refresh reflects external changes, and query controls do not send unbounded requests.
 - [ ] **[MANUAL]** Verify identifiers and filter values are safely handled. Try quotes, wildcard characters, reserved words, and unusual column names; values must be parameterized and identifiers safely quoted.
 - [ ] **[MANUAL]** Insert, update, and delete drafts. Confirm edits remain local until submission; direct Save applies one transactional batch, while Add to Runbook only stages reviewable SQL. Save and Discard have clear results.

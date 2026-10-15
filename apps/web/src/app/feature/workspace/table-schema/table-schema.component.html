@@ -27,11 +27,16 @@
         <h1>{{ table.name }}</h1>
         <p class="page-description">Current metadata from {{ connections.activeConnection()?.target.database }} · PostgreSQL</p>
       </div>
-      @if (table.canAlter) {
-        <span class="readonly-badge"><span aria-hidden="true">◈</span> CAN STAGE CHANGES</span>
-      } @else {
-        <span class="readonly-badge"><span aria-hidden="true">◈</span> READ ONLY</span>
-      }
+      <div class="schema-heading-actions">
+        @if (connections.activeConnection()?.capabilities?.browseData) {
+          <button class="subtle-button" type="button" (click)="openDataView()">Browse data</button>
+        }
+        @if (table.canAlter) {
+          <span class="readonly-badge"><span aria-hidden="true">◈</span> CAN STAGE CHANGES</span>
+        } @else {
+          <span class="readonly-badge"><span aria-hidden="true">◈</span> READ ONLY</span>
+        }
+      </div>
     </header>
 
     @if (table.canAlter) {

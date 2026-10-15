@@ -129,6 +129,40 @@ export const tableSnapshotSchema = z.object({
 
 export type TableSnapshot = z.infer<typeof tableSnapshotSchema>;
 
+export const tableDataFilterSchema = z.object({
+  field: z.string().min(1).max(63),
+  operator: z.enum(['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'between', 'contains', 'notContains', 'startsWith', 'endsWith', 'in', 'isNull', 'isNotNull']),
+  value: z.string().max(4096).optional(),
+  secondValue: z.string().max(4096).optional(),
+  values: z.array(z.string().max(4096)).max(100).optional(),
+});
+
+export const tableDataSortSchema = z.object({
+  field: z.string().min(1).max(63),
+  direction: z.enum(['asc', 'desc']),
+});
+
+export const tableDataQueryRequestSchema = z.object({
+  offset: z.number().int().min(0).max(1_000_000),
+  limit: z.number().int().min(1).max(100),
+  sort: z.array(tableDataSortSchema).max(10).default([]),
+  filters: z.array(tableDataFilterSchema).max(20).default([]),
+  quickFilter: z.string().max(256).default(''),
+});
+export type TableDataQueryRequest = z.infer<typeof tableDataQueryRequestSchema>;
+
+export const tableDataQueryResponseSchema = z.object({
+  columns: z.array(z.object({
+    ordinalPosition: z.number().int().positive(),
+    name: z.string(),
+    dataType: z.string(),
+    nullable: z.boolean(),
+  })),
+  rows: z.array(z.record(z.string(), z.string().nullable())),
+  totalRows: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+});
+export type TableDataQueryResponse = z.infer<typeof tableDataQueryResponseSchema>;
+
 // Type identifiers and parameter rules belong to the active database adapter.
 export const nullableFieldTypeSchema = z.string().trim().min(1).max(128);
 

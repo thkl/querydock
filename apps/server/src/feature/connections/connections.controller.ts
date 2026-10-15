@@ -22,6 +22,7 @@ import {
   foreignKeyFieldChoicesRequestSchema,
   schemaFieldDraftRequestSchema,
   postgresConnectRequestSchema,
+  tableDataQueryRequestSchema,
   type ConnectResponse,
 } from '@querydock/contracts';
 import { ConnectionSessionsService } from './connection-sessions.service.js';
@@ -30,7 +31,7 @@ import { MigrationPlanError, PostgresAdapter, PostgresConnectionError } from '..
 const postgresCapabilities = {
   discoverResources: true,
   inspectTables: true,
-  browseData: false,
+  browseData: true,
   mutateData: false,
   editSchema: true,
   executeSql: false,
@@ -123,6 +124,27 @@ export class ConnectionsController {
       return snapshot;
     } catch (error) {
       if (error instanceof NotFoundException) throw error;
+      if (error instanceof MigrationPlanError) throw this.asMigrationException(error);
+      throw this.asSafeDatabaseException(error);
+    }
+  }
+
+  @Post(':connectionId/tables/:schema/:table/data/query')
+  @HttpCode(200)
+  async queryTableData(
+    @Param('connectionId') connectionId: string,
+    @Param('schema') schema: string,
+    @Param('table') table: string,
+    @Body() body: unknown,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const parsed = tableDataQueryRequestSchema.safeParse(body);
+    if (!parsed.success) throw new BadRequestException('Invalid table data query. Choose a page size up to 100 rows and valid filters.');
+    const configuration = this.sessions.requireConnection(request, response, connectionId);
+    try {
+      return await this.postgres.queryTableData(configuration, schema, table, parsed.data);
+    } catch (error) {
       if (error instanceof MigrationPlanError) throw this.asMigrationException(error);
       throw this.asSafeDatabaseException(error);
     }
