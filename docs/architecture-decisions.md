@@ -187,8 +187,8 @@ No SQLite database or persistent server volume is required for application state
 - Bind the published local Docker HTTP port to 127.0.0.1 by default.
 - Use appropriate session cookie settings, expiry, origin/CSRF protections, and rate limiting.
 - Use database TLS where appropriate.
-- Public/cloud hosting requires a protected access boundary, such as an access gateway, even without an application account database.
-- Restrict arbitrary target-host access appropriately for hosted deployments.
+- QueryDock has no application-account login: users authenticate to databases with the credentials they provide, and database roles authorize operations. Operators may add an access gateway to restrict who can reach the workbench.
+- Restrict target hosts with an allowlist or network policy when a deployment should connect only to a fixed set of databases; leave target selection open for trusted self-hosted use cases that require it.
 - On Docker Desktop for macOS, host databases may be reached through host.docker.internal.
 - Future SQLite/CSV support requires explicit mounts and filesystem permissions.
 

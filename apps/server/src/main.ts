@@ -24,15 +24,6 @@ async function bootstrap(): Promise<void> {
   const port = Number(process.env['PORT'] ?? 3000);
   const host = process.env['QUERYDOCK_SERVER_HOST']
     ?? (process.env['NODE_ENV'] === 'production' ? '0.0.0.0' : '127.0.0.1');
-  const publishedHost = process.env['QUERYDOCK_HTTP_BIND_ADDRESS']?.trim();
-  const effectiveHost = publishedHost || host;
-  const loopbackHosts = new Set(['127.0.0.1', '::1', 'localhost']);
-  const allowedDatabaseHosts = process.env['QUERYDOCK_ALLOWED_DATABASE_HOSTS']?.trim();
-  if (!loopbackHosts.has(effectiveHost.toLowerCase()) && !allowedDatabaseHosts) {
-    throw new Error(
-      'A non-loopback QueryDock bind requires QUERYDOCK_ALLOWED_DATABASE_HOSTS to restrict database targets.',
-    );
-  }
   await app.listen(port, host);
 }
 

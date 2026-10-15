@@ -10,10 +10,9 @@ services:
       NODE_ENV: production
       PORT: 3000
       QUERYDOCK_SERVER_HOST: 0.0.0.0
-      QUERYDOCK_HTTP_BIND_ADDRESS: ${QUERYDOCK_HTTP_BIND_ADDRESS:-127.0.0.1}
       QUERYDOCK_ALLOWED_DATABASE_HOSTS: ${QUERYDOCK_ALLOWED_DATABASE_HOSTS:-}
     ports:
-      - "${QUERYDOCK_HTTP_BIND_ADDRESS:-127.0.0.1}:${QUERYDOCK_HTTP_PORT:-8080}:3000"
+      - "${QUERYDOCK_HTTP_PORT:-8080}:3000"
     restart: unless-stopped
     healthcheck:
       test:
