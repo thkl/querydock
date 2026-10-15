@@ -5,6 +5,7 @@ import { combineLatest } from 'rxjs';
 import type { TableDataQueryRequest, TableDataQueryResponse } from '@querydock/contracts';
 import {
   AgridComponent,
+  AgridControl,
   AgridProvider,
   AgridServerSideRowModel,
   type AgridServerSideRequest,
@@ -35,10 +36,12 @@ export class TableDataComponent {
   );
   readonly error = signal<string | null>(null);
   readonly loaded = signal(false);
+  private id = signal<string | null>(null);
   private requestVersion = 0;
   private currentColumns: TableDataQueryResponse['columns'] = [];
   private gridState = this.createGridState();
   readonly provider = signal(this.gridState.provider);
+  readonly gridControl = new AgridControl({ allowRowReorder: false, pageSize: 20 });
 
   constructor() {
     effect(() => {
@@ -47,6 +50,7 @@ export class TableDataComponent {
       const table = params.get('tableName');
       const schema = query.get('schema') ?? 'public';
       this.requestVersion += 1;
+      this.id.set(`${schema}.${table}`);
       this.error.set(null);
       this.loaded.set(false);
       this.currentColumns = [];
@@ -72,19 +76,24 @@ export class TableDataComponent {
       maxBlocksInCache: 4,
       datasource: { getRows: (request) => this.loadRows(request) },
     });
+
     const provider = new AgridProvider<TableDataRow>({
       serverSideRowModel: rowModel,
+      control: this.gridControl,
       columns: [],
       readonly: true,
       serverSideFiltering: true,
       enableQuickFilter: true,
       showFilterPanel: true,
       showSidebar: true,
-      showToolbar: false,
       hideGridStatusBar: false,
       allowAddRows: false,
-      enableRowMarking: false,
+      zebraStripes: true,
+      rowSelection: 'single',
+      gridId: `query_data_${this.id()}`,
+      showRowNumbers: true,
       enableColumnMarking: false,
+      resizableSidebar: true,
       emptyText: 'This table has no rows. The column headers are still available for filtering and sorting.',
     });
     return { rowModel, provider };
