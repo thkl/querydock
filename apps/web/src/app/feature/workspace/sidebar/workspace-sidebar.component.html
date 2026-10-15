@@ -11,45 +11,76 @@
     <span>CONNECTIONS</span>
     <button class="tiny-icon-button" type="button" aria-label="Add connection" title="Connect to PostgreSQL" (click)="connections.openConnectDialog()">+</button>
   </div>
+  @if (connections.disconnectError()) {
+    <p class="connection-error" role="alert">Could not disconnect: {{ connections.disconnectError() }}</p>
+  }
   <div class="resource-tree">
     @for (connection of connections.connections(); track connection.connectionId) {
-      <button
-        class="connection-item"
-        [class.selected]="connections.activeConnectionId() === connection.connectionId"
-        type="button"
-        (click)="connections.selectConnection(connection.connectionId)"
-      >
-        <span class="database-icon">◉</span>
-        <span class="connection-labels" [title]="connection.target.database + ' · ' + connection.target.host + ':' + connection.target.port"><strong>{{ connection.target.database }}</strong><small>{{ connection.target.host }}:{{ connection.target.port }}</small></span>
-        <span class="online-indicator" aria-label="Connected"></span>
-      </button>
-    }
-    @if (connections.activeConnection()) {
-      @if (connections.resourceErrorsByConnection().get(connections.activeConnectionId() ?? ''); as resourceError) {
-        <p class="empty-resources resource-error" role="alert">Resource discovery failed: {{ resourceError }}</p>
-      }
-      @for (group of connections.resourceGroups(); track group.schema) {
-        <div class="tree-row schema-row" [title]="group.schema">
-          <span class="tree-caret">⌄</span><span class="schema-icon">▱</span><span>{{ group.schema }}</span>
-          <button class="schema-add-table" type="button" [attr.aria-label]="'Create table in ' + group.schema" [title]="'Create table in ' + group.schema" (click)="pages.openCreateTable(group.schema)">＋</button>
-        </div>
-        @for (resource of group.resources; track resource.schema + '.' + resource.name) {
+      <div class="connection-entry" [class.selected]="connections.activeConnectionId() === connection.connectionId">
+        <button
+          class="connection-item"
+          [class.selected]="connections.activeConnectionId() === connection.connectionId"
+          type="button"
+          (click)="connections.selectConnection(connection.connectionId)"
+          [title]="connectionLabel(connection.connectionId)"
+        >
+          <span class="database-icon">◉</span>
+          <span class="connection-labels"><strong>{{ connectionLabel(connection.connectionId) }}</strong><small>{{ connection.target.host }}:{{ connection.target.port }} · {{ connection.target.username }}</small></span>
+          <span class="online-indicator" aria-label="Connected"></span>
+        </button>
+        @if (disconnectConfirmationId() === connection.connectionId) {
+          <div class="disconnect-confirmation" role="group" [attr.aria-label]="'Confirm disconnect ' + connectionLabel(connection.connectionId)">
+            <span>Close this session’s tabs? Unsubmitted table drafts will be discarded; Runbook changes remain.</span>
+            <button type="button" [disabled]="connections.disconnectingId() === connection.connectionId" (click)="disconnect(connection.connectionId)">
+              @if (connections.disconnectingId() === connection.connectionId) { Disconnecting… } @else { Disconnect }
+            </button>
+            <button type="button" (click)="disconnectConfirmationId.set(null)">Cancel</button>
+          </div>
+        } @else {
           <button
-            class="tree-row table-row"
-            [class.selected]="pages.isActiveTable(connections.activeConnectionId() ?? '', resource.schema, resource.name)"
+            class="disconnect-button"
             type="button"
-            [title]="resource.schema + '.' + resource.name"
-            [attr.aria-current]="pages.isActiveTable(connections.activeConnectionId() ?? '', resource.schema, resource.name) ? 'page' : null"
-            (click)="openResourceSchema(resource.schema, resource.name)"
-          >
-            <span class="table-icon" aria-hidden="true">▦</span><span>{{ resource.name }}</span>
-          </button>
+            [disabled]="connections.disconnectingId() === connection.connectionId"
+            [attr.aria-label]="'Disconnect ' + connectionLabel(connection.connectionId)"
+            title="Disconnect"
+            (click)="disconnectConfirmationId.set(connection.connectionId)"
+          >×</button>
         }
-      }
-      @if (!connections.activeResources().length && !connections.resourceErrorsByConnection().get(connections.activeConnectionId() ?? '')) {
-        <p class="empty-resources">No visible tables or views.</p>
-      }
-    } @else {
+        @if (connections.activeConnectionId() === connection.connectionId) {
+          <div class="connection-tree">
+            @if (connections.resourceErrorsByConnection().get(connection.connectionId); as resourceError) {
+              <p class="empty-resources resource-error" role="alert">Resource discovery failed: {{ resourceError }}</p>
+            }
+            @for (group of connections.resourceGroups(); track group.schema) {
+              <div class="tree-row schema-row" [title]="group.schema">
+                <span class="tree-caret">⌄</span><span class="schema-icon">▱</span><span>{{ group.schema }}</span>
+                <button class="schema-add-table" type="button" [attr.aria-label]="'Create table in ' + group.schema" [title]="'Create table in ' + group.schema" (click)="pages.openCreateTable(group.schema)">＋</button>
+              </div>
+              @for (resource of group.resources; track resource.schema + '.' + resource.name) {
+                <button
+                  class="tree-row table-row"
+                  [class.selected]="pages.isActiveTable(connection.connectionId, resource.schema, resource.name)"
+                  type="button"
+                  [title]="resource.schema + '.' + resource.name"
+                  [attr.aria-current]="pages.isActiveTable(connection.connectionId, resource.schema, resource.name) ? 'page' : null"
+                  (click)="openResourceSchema(resource.schema, resource.name)"
+                >
+                  <span class="table-icon" aria-hidden="true">▦</span><span>{{ resource.name }}</span>
+                </button>
+              }
+            }
+            <a class="tree-row relationship-tree-row" routerLink="/relationships" routerLinkActive="selected" ariaCurrentWhenActive="page"
+              (click)="pages.prepareRelationshipDiagram(connection.connectionId)">
+              <span class="table-icon" aria-hidden="true">⌘</span><span>Relationships</span>
+            </a>
+            @if (!connections.activeResources().length && !connections.resourceErrorsByConnection().get(connection.connectionId)) {
+              <p class="empty-resources">No visible tables or views.</p>
+            }
+          </div>
+        }
+      </div>
+    }
+    @if (!connections.connections().length) {
       <p class="empty-resources">Connect to PostgreSQL to inspect schemas and tables.</p>
     }
   </div>

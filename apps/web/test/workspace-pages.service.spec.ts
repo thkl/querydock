@@ -123,6 +123,22 @@ describe('WorkspacePagesService', () => {
     expect(connections.selectConnection).toHaveBeenCalledWith('connection-b');
     expect(router.navigateByUrl).toHaveBeenCalledWith(page.route);
   });
+
+  it('closes only the disconnected connection pages and discards its unsent table drafts', () => {
+    const { pages, router, events } = createHarness();
+    const disconnectedPage = pages.registerOpenedTableSchema('connection-a', 'public', 'orders');
+    const remainingPage = pages.registerOpenedTableSchema('connection-b', 'public', 'orders');
+    const createPage = pages.registerOpenedCreateTable('public', 'draft-a');
+    pages.saveCreateTableDraft(createPage.id, { tableName: 'scratch', ifNotExists: false, fields: [] });
+    events.next(new NavigationEnd(1, '/', disconnectedPage.route));
+
+    pages.closeConnectionPages('connection-a');
+
+    expect(pages.pages()).toEqual([remainingPage]);
+    expect(pages.createTablePages()).toEqual([]);
+    expect(pages.createTableDraft(createPage.id)).toBeNull();
+    expect(router.navigateByUrl).toHaveBeenCalledWith(remainingPage.route);
+  });
 });
 
 describe('ForeignKeyEditorState', () => {

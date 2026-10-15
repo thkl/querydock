@@ -31,11 +31,13 @@ interface EncryptedProfileRecord {
 
 interface ProfilePayload {
   configuration: PostgresConnectRequest;
+  name?: string;
   createdAt: number;
 }
 
 export interface SavedConnectionProfile {
   id: string;
+  name: string;
   configuration: PostgresConnectRequest;
   createdAt: number;
   updatedAt: number;
@@ -103,13 +105,15 @@ export class ConnectionVaultService {
     }
   }
 
-  async save(configuration: PostgresConnectRequest): Promise<void> {
+  async save(configuration: PostgresConnectRequest, name?: string): Promise<void> {
     const key = this.requireUnlockedKey();
     const existing = this.profiles().find(({ configuration: saved }) => sameTarget(saved, configuration));
     const id = existing?.id ?? crypto.randomUUID();
     const createdAt = existing?.createdAt ?? Date.now();
     const updatedAt = Date.now();
-    const payload: ProfilePayload = { configuration, createdAt };
+    const savedName = name?.trim() ?? existing?.name ?? '';
+    if (savedName.length > 80) throw new Error('Connection names must be 80 characters or fewer.');
+    const payload: ProfilePayload = { configuration, name: savedName, createdAt };
     const encrypted = await this.encrypt(JSON.stringify(payload), key, `profile:${id}:v1`);
     const record: EncryptedProfileRecord = {
       id: `profile:${id}`,
@@ -118,7 +122,7 @@ export class ConnectionVaultService {
       updatedAt,
     };
     await this.putRecord(record);
-    const profile = { id, configuration, createdAt, updatedAt };
+    const profile = { id, name: savedName, configuration, createdAt, updatedAt };
     this.profiles.update((current) => [
       ...current.filter((candidate) => candidate.id !== id),
       profile,
@@ -185,6 +189,7 @@ export class ConnectionVaultService {
       if (!parsed.success || !Number.isFinite(payload.createdAt)) throw new Error('A saved connection profile is invalid.');
       profiles.push({
         id,
+        name: typeof payload.name === 'string' ? payload.name : '',
         configuration: parsed.data,
         createdAt: payload.createdAt,
         updatedAt: record.updatedAt,

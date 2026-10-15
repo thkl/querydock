@@ -2,7 +2,7 @@ import { ChangeDetectionStrategy, Component, ElementRef, effect, inject, signal,
 import { RouterLink, RouterLinkActive } from '@angular/router';
 import { RunbookService } from '../runbook/runbook.service';
 import { ConfirmationDialogService } from '../confirmation/confirmation-dialog.service';
-import { WorkspacePagesService, type CreateTablePage, type TableSchemaPage } from '../workspace-pages.service';
+import { WorkspacePagesService, type CreateTablePage, type RelationshipDiagramPage, type TableSchemaPage } from '../workspace-pages.service';
 
 @Component({
   selector: 'qd-workspace-tabs',
@@ -21,7 +21,8 @@ export class WorkspaceTabsComponent {
 
   constructor() {
     effect(() => {
-      const activeId = this.pages.activePage()?.id ?? this.pages.activeCreateTablePage()?.id;
+      const activeId = this.pages.activePage()?.id ?? this.pages.activeCreateTablePage()?.id
+        ?? this.pages.activeRelationshipPage()?.id;
       const activeTab = this.pageTabElements().find((tab) => tab.nativeElement.dataset['pageId'] === activeId);
       if (activeTab) requestAnimationFrame(() => activeTab.nativeElement.scrollIntoView({ block: 'nearest', inline: 'nearest' }));
     });
@@ -31,6 +32,12 @@ export class WorkspaceTabsComponent {
     event.preventDefault();
     event.stopPropagation();
     this.pages.closePage(page);
+  }
+
+  closeRelationshipPage(event: MouseEvent, page: RelationshipDiagramPage): void {
+    event.preventDefault();
+    event.stopPropagation();
+    this.pages.closeRelationshipPage(page);
   }
 
   async closeCreatePage(event: MouseEvent, page: CreateTablePage): Promise<void> {

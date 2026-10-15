@@ -16,6 +16,13 @@ export const routes: Routes = [
           ),
       },
       {
+        path: 'relationships',
+        loadComponent: () =>
+          import('./feature/workspace/relationship-diagram/relationship-diagram.component').then(
+            (component) => component.RelationshipDiagramComponent,
+          ),
+      },
+      {
         path: 'tables/:tableName/schema',
         loadComponent: () =>
           import('./feature/workspace/table-schema/table-schema.component').then(

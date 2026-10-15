@@ -33,6 +33,7 @@
     "@angular/build": "^22.0.0",
     "@angular/cli": "^22.0.0",
     "@angular/compiler-cli": "^22.0.0",
+    "fake-indexeddb": "^6.2.5",
     "typescript": "^6.0.0"
   }
 }

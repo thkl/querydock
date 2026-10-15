@@ -1,0 +1,207 @@
+<section class="relationship-page">
+  @if (connections.activeConnection()) {
+    <header class="page-header">
+      <div>
+        <p class="eyebrow">DATABASE MAP · {{ connections.activeConnection()?.target.database }}</p>
+        <h1 id="relationship-title">Relationships</h1>
+        <p class="page-description">Explore tables and their foreign-key paths. Relationship edits are reviewed in the Runbook before Apply.</p>
+      </div>
+      <div class="page-actions">
+        <button class="secondary-button" type="button" [disabled]="loading()" (click)="refresh()">
+          @if (loading()) { Refreshing… } @else { Refresh diagram }
+        </button>
+        <button class="primary-button" type="button" [disabled]="!snapshots().some((snapshot) => snapshot.canAlter) || runbook.previewing()" (click)="startNewRelationship()">
+          Add relationship
+        </button>
+      </div>
+    </header>
+
+    @if (runbook.noticeLabel()) {
+      <div class="runbook-notice" role="status">
+        <span>{{ runbook.noticeLabel() }}</span>
+        <a routerLink="/runbook">Review in Runbook <span aria-hidden="true">→</span></a>
+      </div>
+    }
+    @if (editorMessage()) { <p class="status-message" role="status">{{ editorMessage() }}</p> }
+    @if (editorError()) { <p class="error-message" role="alert">{{ editorError() }}</p> }
+    @if (partialLoadCount()) {
+      <p class="warning-message" role="status">{{ partialLoadCount() }} table{{ partialLoadCount() === 1 ? '' : 's' }} could not be inspected; the diagram may be incomplete.</p>
+    }
+    @if (loadError() && snapshots().length) {
+      <p class="warning-message" role="status">Refresh failed: {{ loadError() }} Showing the last loaded diagram.</p>
+    }
+
+    @if (loading() && !snapshots().length) {
+      <div class="loading-state" role="status">Loading table and relationship metadata…</div>
+    } @else if (loadError() && !snapshots().length) {
+      <div class="error-state" role="alert">{{ loadError() }} <button class="secondary-button" type="button" (click)="refresh()">Retry</button></div>
+    } @else if (!snapshots().length) {
+      <div class="empty-state">
+        <span class="eyebrow">NO VISIBLE TABLES</span>
+        <h2>Nothing to map yet</h2>
+        <p>This database role cannot see any tables in the current connection.</p>
+      </div>
+    } @else {
+      <div class="diagram-meta">
+        <span>{{ snapshots().length }} tables</span>
+        <span>{{ relationships().length }} relationships</span>
+        <span class="diagram-help">Drag a table by its header · click a line or field to focus · right-click for actions · click the canvas to clear focus</span>
+      </div>
+      <div #diagramViewport class="diagram-viewport" role="region" aria-label="Database relationship diagram" tabindex="0" (scroll)="saveViewport($event)" (click)="clearRelationshipFocus()">
+        <div #diagramCanvas class="diagram-canvas" [style.width.px]="diagramWidth()" [style.height.px]="diagramHeight()">
+          <svg #relationshipSvg class="relationship-lines" [attr.viewBox]="'0 0 ' + diagramWidth() + ' ' + diagramHeight()" role="img" aria-label="Foreign-key paths between database tables">
+            <defs>
+              <marker id="relationship-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z"></path>
+              </marker>
+            </defs>
+            @for (relationship of relationships(); track relationship.id) {
+              @if (relationshipPath(relationship); as path) {
+                <path class="relationship-hit-area" [attr.d]="path" role="button" tabindex="0"
+                  [attr.aria-label]="'Focus relationship ' + relationship.name"
+                  (click)="onRelationshipClick($event, relationship)"
+                  (keydown.enter)="onRelationshipClick($event, relationship)"
+                  (keydown.space)="$event.preventDefault(); onRelationshipClick($event, relationship)"
+                  (contextmenu)="openRelationshipContext($event, relationship)"></path>
+                <path [attr.d]="path" [class.pending]="relationship.pending" [class.is-focused]="selectedRelationshipId() === relationship.id"
+                  [class.is-dimmed]="selectedRelationshipId() && selectedRelationshipId() !== relationship.id"
+                  marker-end="url(#relationship-arrow)" aria-hidden="true"></path>
+              }
+            }
+          </svg>
+          @for (snapshot of snapshots(); track nodeKey(snapshot); let index = $index) {
+            <article class="table-card" [class.is-dimmed]="selectedRelationshipId() && !isRelationshipParticipant(snapshot)"
+              [class.is-participating]="selectedRelationshipId() && isRelationshipParticipant(snapshot)"
+              [class.is-dragging]="draggingTableKey() === nodeKey(snapshot)"
+                  [attr.data-table-key]="nodeKey(snapshot)"
+              [style.left.px]="nodeX(index)" [style.top.px]="nodeY(index)" [style.height.px]="cardHeight(snapshot)"
+              (click)="$event.stopPropagation()">
+              <header class="table-card-header" (pointerdown)="startTableDrag($event, snapshot)">
+                <div class="table-heading">
+                  <span class="schema-label">{{ snapshot.schema }}</span>
+                  <strong [title]="snapshot.name">{{ snapshot.name }}</strong>
+                </div>
+                <button class="open-table-button" type="button" [attr.aria-label]="'Open schema for ' + snapshot.schema + '.' + snapshot.name" title="Open schema" (click)="openTable(snapshot)">↗</button>
+              </header>
+              <ul class="field-list" [attr.aria-label]="'Fields in ' + snapshot.name">
+                @for (field of snapshot.fields; track field.name) {
+                  <li [attr.data-table-key]="nodeKey(snapshot)" [attr.data-field-name]="field.name"
+                    [class.is-related-field]="isRelationshipField(snapshot, field.name)"
+                    (click)="onFieldClick($event, snapshot, field.name)" (contextmenu)="openFieldContext($event, snapshot, field.name)">
+                    <span class="field-name">{{ field.name }}</span>
+                    <span class="field-type">{{ field.dataType }}</span>
+                    <span class="key-tags">
+                      @for (kind of fieldKeyKinds(snapshot, field.name); track kind) { <span class="key-tag">{{ kind }}</span> }
+                    </span>
+                  </li>
+                }
+              </ul>
+              <footer class="table-card-footer">
+                <span>{{ relationshipsFor(snapshot).length }} foreign key{{ relationshipsFor(snapshot).length === 1 ? '' : 's' }}</span>
+                @if (!snapshot.canAlter) { <span class="read-only-label">Read only</span> }
+              </footer>
+            </article>
+          }
+        </div>
+      </div>
+
+    }
+  }
+
+  @if (contextMenu(); as menu) {
+    <button class="context-menu-backdrop" type="button" aria-label="Close relationship menu" (click)="closeContextMenu()"></button>
+    <div class="relationship-context-menu" role="menu" [style.left.px]="menu.x" [style.top.px]="menu.y" (click)="$event.stopPropagation()" (contextmenu)="$event.preventDefault()">
+      @for (relationship of contextMenuRelationships(); track relationship.id) {
+        <section class="context-menu-group">
+          @if (contextMenuRelationships().length > 1) {
+            <p class="context-menu-label">{{ relationship.sourceTable }}.{{ fieldsLabel(relationship.fieldNames) }} → {{ relationship.referencedTable }}.{{ fieldsLabel(relationship.referencedFieldNames) }}</p>
+          }
+          @if (relationship.editable) {
+            <button type="button" role="menuitem" (click)="contextEdit(relationship)">Edit relationship</button>
+            <button class="danger-action" type="button" role="menuitem" (click)="contextRemove(relationship)">
+              @if (relationship.pending) { Remove draft } @else { Stage removal }
+            </button>
+          } @else {
+            <span class="context-menu-readonly">Read only</span>
+          }
+        </section>
+      }
+    </div>
+  }
+
+  @if (editorOpen()) {
+    <div class="editor-backdrop">
+      <section class="relationship-editor" role="dialog" aria-modal="true" aria-labelledby="editor-title">
+        <header class="editor-header">
+          <div>
+            <p class="eyebrow">FOREIGN KEY · {{ editingRelationship() ? 'EDIT' : 'NEW' }}</p>
+            <h2 id="editor-title">{{ editingRelationship() ? 'Edit relationship' : 'Add relationship' }}</h2>
+          </div>
+          <button class="close-button" type="button" aria-label="Close relationship editor" [disabled]="editorBusy()" (click)="closeEditor()">×</button>
+        </header>
+
+        <label class="editor-label" for="relationship-name">Constraint name</label>
+        <input id="relationship-name" class="editor-input" [value]="constraintName()" maxlength="63" (input)="constraintName.set($any($event.target).value)" placeholder="fk_orders_customers" />
+
+        <label class="editor-label" for="relationship-source">From table</label>
+        <select id="relationship-source" class="editor-input" [value]="sourceKey()" [disabled]="!!editingRelationship()" (change)="onSourceChanged($event)">
+          <option value="">Choose source table…</option>
+          @for (snapshot of snapshots(); track nodeKey(snapshot)) {
+            @if (snapshot.canAlter) { <option [value]="nodeKey(snapshot)" [selected]="snapshot.schema===editingRelationship()?.sourceSchema && snapshot.name === editingRelationship()?.sourceTable">{{ snapshot.schema }}.{{ snapshot.name }}</option> }
+          }
+        </select>
+
+        @if (sourceSnapshot(); as source) {
+          <fieldset class="field-picker">
+            <legend>Local fields · {{ source.schema }}.{{ source.name }}</legend>
+            @for (field of source.fields; track field.name) {
+              <label>
+                <input type="checkbox" [checked]="localFieldNames().includes(field.name)" (change)="onLocalFieldChanged(field.name, $event)" />
+                <span>{{ field.name }}</span><small>{{ field.dataType }}</small>
+              </label>
+            }
+          </fieldset>
+        }
+
+        <label class="editor-label" for="relationship-target">References table</label>
+        <select id="relationship-target" class="editor-input" [value]="targetKey()" (change)="onTargetChanged($event)">
+          <option value="">Choose target table…</option>
+          @for (snapshot of snapshots(); track nodeKey(snapshot)) {
+            <option [value]="nodeKey(snapshot)" [selected]="snapshot.schema===editingRelationship()?.referencedSchema && snapshot.name === editingRelationship()?.referencedTable">{{ snapshot.schema }}.{{ snapshot.name }}</option>
+          }
+        </select>
+
+        @if (localFieldNames().length && targetSnapshot()) {
+          @if (editorBusy()) {
+            <p class="editor-hint" role="status">Checking target keys with the database adapter…</p>
+          } @else if (fieldSets().length) {
+            <label class="editor-label" for="relationship-target-fields">Referenced key fields</label>
+            <select id="relationship-target-fields" class="editor-input" [value]="selectedFieldSet()" (change)="selectedFieldSet.set($any($event.target).value)">
+              @for (fieldSet of fieldSets(); track fieldSet.fieldNames.join(',')) {
+                <option [value]="fieldSet.fieldNames.join('\u0000')" [disabled]="!fieldSet.compatible">
+                  {{ fieldSet.label }}{{ fieldSet.compatible ? ' · compatible' : ' · incompatible' }}
+                </option>
+              }
+            </select>
+            @if (selectedFieldSetOption(); as selected) {
+              @if (!selected.compatible && selected.reason) { <p class="editor-error" role="alert">{{ selected.reason }}</p> }
+            }
+          } @else if (editorError()) {
+            <p class="editor-error" role="alert">{{ editorError() }}</p>
+          }
+        }
+
+        @if (editorError() && fieldSets().length) { <p class="editor-error" role="alert">{{ editorError() }}</p> }
+        <p class="editor-hint">The server checks local and referenced field types before staging. No database changes occur until you review and Apply the Runbook.</p>
+        <footer class="editor-actions">
+          <button class="secondary-button" type="button" [disabled]="editorBusy()" (click)="closeEditor()">Cancel</button>
+          <button class="primary-button" type="button"
+            [disabled]="editorBusy() || !sourceSnapshot()?.canAlter || !selectedFieldSetOption()?.compatible || !localFieldNames().length || !constraintName().trim()"
+            (click)="saveRelationship()">
+            @if (editorBusy()) { Checking… } @else { Save to Runbook }
+          </button>
+        </footer>
+      </section>
+    </div>
+  }
+</section>

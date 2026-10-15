@@ -14,10 +14,24 @@ export class ConnectionDialogComponent {
   readonly state = inject(ConnectionApiService);
   readonly vault = inject(ConnectionVaultService);
   readonly vaultSetupOpen = signal(false);
+  readonly saveToVault = signal(false);
   readonly vaultMessage = signal<string | null>(null);
-  readonly pendingVaultSave = signal<PostgresConnectRequest | null>(null);
+  readonly pendingVaultSave = signal<{ configuration: PostgresConnectRequest; name: string } | null>(null);
   readonly resetVaultArmed = signal(false);
   readonly forgettingProfileId = signal<string | null>(null);
+  readonly editingProfileId = signal<string | null>(null);
+  readonly editingProfileName = signal('');
+
+  closeDialog(): void {
+    this.saveToVault.set(false);
+    this.state.closeConnectDialog();
+  }
+
+  lockVault(): void {
+    this.vault.lock();
+    this.saveToVault.set(false);
+    this.vaultMessage.set(null);
+  }
 
   async createVault(event: SubmitEvent): Promise<void> {
     event.preventDefault();
@@ -70,28 +84,35 @@ export class ConnectionDialogComponent {
       sslMode: String(values.get('sslMode') ?? 'require') as PostgresConnectRequest['sslMode'],
     };
     const saveInVault = values.get('saveInVault') === 'on';
+    const profileName = String(values.get('connectionName') ?? '').trim();
     const connected = await this.state.connect(configuration, !saveInVault);
     if (!connected) return;
     if (saveInVault) {
       try {
-        await this.vault.save(configuration);
+        await this.vault.save(configuration, profileName);
         this.vaultMessage.set('Connection saved in the encrypted browser vault.');
       } catch (error) {
         this.vaultMessage.set(error instanceof Error ? error.message : 'Could not save this connection.');
-        this.pendingVaultSave.set(configuration);
+        this.pendingVaultSave.set({ configuration, name: profileName });
         return;
       }
       this.state.closeConnectDialog();
     }
     form.reset();
+    this.saveToVault.set(false);
+  }
+
+  updateSaveToVault(event: Event): void {
+    this.saveToVault.set((event.currentTarget as HTMLInputElement).checked);
   }
 
   async retryVaultSave(): Promise<void> {
-    const configuration = this.pendingVaultSave();
-    if (!configuration) return;
+    const pending = this.pendingVaultSave();
+    if (!pending) return;
     try {
-      await this.vault.save(configuration);
+      await this.vault.save(pending.configuration, pending.name);
       this.pendingVaultSave.set(null);
+      this.saveToVault.set(false);
       this.vaultMessage.set('Connection saved in the encrypted browser vault.');
       this.state.closeConnectDialog();
     } catch (error) {
@@ -118,6 +139,21 @@ export class ConnectionDialogComponent {
     }
   }
 
+  startRenameProfile(profile: SavedConnectionProfile): void {
+    this.editingProfileId.set(profile.id);
+    this.editingProfileName.set(profile.name);
+  }
+
+  async saveProfileName(profile: SavedConnectionProfile): Promise<void> {
+    try {
+      await this.vault.save(profile.configuration, this.editingProfileName());
+      this.editingProfileId.set(null);
+      this.vaultMessage.set('Connection name updated.');
+    } catch (error) {
+      this.vaultMessage.set(error instanceof Error ? error.message : 'Could not update this connection name.');
+    }
+  }
+
   async resetVault(): Promise<void> {
     if (!this.resetVaultArmed()) {
       this.resetVaultArmed.set(true);
@@ -134,7 +170,8 @@ export class ConnectionDialogComponent {
   }
 
   profileLabel(profile: SavedConnectionProfile): string {
+    if (profile.name.trim()) return profile.name.trim();
     const { configuration } = profile;
-    return `${configuration.database} · ${configuration.host}:${configuration.port}`;
+    return `${configuration.database} · ${configuration.host}:${configuration.port} · ${configuration.username}`;
   }
 }

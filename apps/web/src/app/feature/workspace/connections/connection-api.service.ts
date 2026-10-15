@@ -24,6 +24,7 @@ export class ApiRequestError extends Error {
 @Injectable({ providedIn: 'root' })
 export class ConnectionApiService {
   readonly connections = signal<ConnectResponse[]>([]);
+  readonly sessionRestoreComplete = signal(false);
   readonly activeConnectionId = signal<string | null>(null);
   readonly resourcesByConnection = signal<ReadonlyMap<string, ResourceDescriptor[]>>(new Map());
   readonly resourceErrorsByConnection = signal<ReadonlyMap<string, string>>(new Map());
@@ -43,7 +44,9 @@ export class ConnectionApiService {
     return [...groups].map(([schema, resources]) => ({ schema, resources }));
   });
   readonly connecting = signal(false);
+  readonly disconnectingId = signal<string | null>(null);
   readonly connectError = signal<string | null>(null);
+  readonly disconnectError = signal<string | null>(null);
   readonly connectDialogOpen = signal(false);
 
   constructor() {
@@ -88,6 +91,34 @@ export class ConnectionApiService {
       return false;
     } finally {
       this.connecting.set(false);
+    }
+  }
+
+  async disconnect(connectionId: string): Promise<boolean> {
+    this.disconnectError.set(null);
+    this.disconnectingId.set(connectionId);
+    try {
+      await request<void>(`/api/connections/${encodeURIComponent(connectionId)}`, { method: 'DELETE' });
+      this.connections.update((current) => current.filter(({ connectionId: id }) => id !== connectionId));
+      this.resourcesByConnection.update((current) => {
+        const next = new Map(current);
+        next.delete(connectionId);
+        return next;
+      });
+      this.resourceErrorsByConnection.update((current) => {
+        const next = new Map(current);
+        next.delete(connectionId);
+        return next;
+      });
+      if (this.activeConnectionId() === connectionId) {
+        this.activeConnectionId.set(this.connections()[0]?.connectionId ?? null);
+      }
+      return true;
+    } catch (error) {
+      this.disconnectError.set(errorMessage(error));
+      return false;
+    } finally {
+      this.disconnectingId.set(null);
     }
   }
 
@@ -160,6 +191,8 @@ export class ConnectionApiService {
       ));
     } catch {
       // An unavailable API simply leaves the workspace disconnected.
+    } finally {
+      this.sessionRestoreComplete.set(true);
     }
   }
 

@@ -6,7 +6,7 @@
           <p class="eyebrow">NEW CONNECTION</p>
           <h2 id="connection-title">Connect to PostgreSQL</h2>
         </div>
-        <button class="close-button" type="button" aria-label="Close connection dialog" (click)="state.closeConnectDialog()">×</button>
+        <button class="close-button" type="button" aria-label="Close connection dialog" (click)="closeDialog()">×</button>
       </header>
 
       <p class="dialog-description">Active credentials stay in the server’s expiring session. You can optionally keep an encrypted copy in this browser’s connection vault.</p>
@@ -18,7 +18,7 @@
             <h3 id="vault-title">Encrypted connection vault</h3>
           </div>
           @if (vault.status() === 'unlocked') {
-            <button class="vault-secondary-button" type="button" (click)="vault.lock(); vaultMessage.set(null)">Lock vault</button>
+            <button class="vault-secondary-button" type="button" (click)="lockVault()">Lock vault</button>
           }
         </div>
 
@@ -63,10 +63,22 @@
                 <li class="saved-connection">
                   <div class="saved-connection-details">
                     <strong>{{ profileLabel(profile) }}</strong>
-                    <span>{{ profile.configuration.username }} · {{ profile.configuration.sslMode }}</span>
+                    <span>{{ profile.configuration.database }} · {{ profile.configuration.host }}:{{ profile.configuration.port }} · {{ profile.configuration.username }} · {{ profile.configuration.sslMode }}</span>
+                    @if (editingProfileId() === profile.id) {
+                      <label class="field profile-name-field">
+                        <span>Connection name</span>
+                        <input [value]="editingProfileName()" (input)="editingProfileName.set($any($event.target).value)" maxlength="80" aria-label="Connection name" />
+                      </label>
+                    }
                   </div>
                   <div class="saved-connection-actions">
                     <button class="vault-secondary-button" type="button" (click)="connectSaved(profile)">Connect</button>
+                    @if (editingProfileId() === profile.id) {
+                      <button class="vault-link-button" type="button" (click)="saveProfileName(profile)">Save name</button>
+                      <button class="vault-link-button" type="button" (click)="editingProfileId.set(null)">Cancel</button>
+                    } @else {
+                      <button class="vault-link-button" type="button" (click)="startRenameProfile(profile)">Rename</button>
+                    }
                     @if (forgettingProfileId() === profile.id) {
                       <button class="vault-link-button" type="button" (click)="forgetProfile(profile)">Confirm remove</button>
                       <button class="vault-link-button" type="button" (click)="forgettingProfileId.set(null)">Cancel</button>
@@ -111,6 +123,12 @@
             <span>Host</span>
             <input name="host" type="text" autocomplete="url" placeholder="localhost" value="localhost" required />
           </label>
+          @if (vault.status() === 'unlocked' && saveToVault()) {
+            <label class="field field-profile-name">
+              <span>Connection name</span>
+              <input name="connectionName" type="text" maxlength="80" autocomplete="organization-title" placeholder="e.g. Production read-only" required />
+            </label>
+          }
           <label class="field">
             <span>Port</span>
             <input name="port" type="number" min="1" max="65535" value="5432" required />
@@ -139,7 +157,7 @@
 
         @if (vault.status() === 'unlocked') {
           <label class="save-profile-option">
-            <input name="saveInVault" type="checkbox" />
+            <input name="saveInVault" type="checkbox" [checked]="saveToVault()" (change)="updateSaveToVault($event)" />
             <span>Save this connection in the encrypted browser vault</span>
           </label>
         }
@@ -149,7 +167,7 @@
         }
 
         <footer class="dialog-actions">
-          <button class="cancel-button" type="button" [disabled]="state.connecting()" (click)="state.closeConnectDialog()">Cancel</button>
+          <button class="cancel-button" type="button" [disabled]="state.connecting()" (click)="closeDialog()">Cancel</button>
           <button class="connect-button" type="submit" [disabled]="state.connecting() || pendingVaultSave() !== null">
             @if (state.connecting()) { Connecting… } @else { Connect }
           </button>

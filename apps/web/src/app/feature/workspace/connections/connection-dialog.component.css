@@ -41,6 +41,8 @@ h2 { margin: 0; color: var(--color-foreground); font-size: 1.35em; letter-spacin
 .saved-connection-details { display: grid; min-width: 0; gap: 4px; }
 .saved-connection-details strong { overflow-wrap: anywhere; color: var(--color-foreground); font-size: .91em; }
 .saved-connection-details span { color: var(--color-muted); font-size: .82em; }
+.profile-name-field { width: min(260px, 100%); margin-top: 4px; }
+.field-profile-name { grid-column: 1 / -1; }
 .saved-connection-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 4px; }
 .vault-message { margin: 0; color: var(--color-accent); font-size: .87em; line-height: 1.45; }
 .vault-save-retry { display: flex; align-items: center; justify-content: space-between; gap: 12px; }

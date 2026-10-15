@@ -1,7 +1,9 @@
 :host {
   display: flex;
-  min-height: 100dvh;
+  height: 100dvh;
+  min-height: 0;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .workspace {
@@ -9,6 +11,7 @@
   min-width: 0;
   min-height: 0;
   flex: 1;
+  overflow: hidden;
   grid-template-columns: minmax(180px, var(--sidebar-width)) 24px minmax(0, 1fr);
 }
 
@@ -60,6 +63,7 @@
   min-height: 0;
   flex: 1;
   flex-direction: column;
+  overflow: hidden;
 }
 
 @media (max-width: 680px) {

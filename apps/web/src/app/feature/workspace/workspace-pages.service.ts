@@ -22,6 +22,14 @@ export interface CreateTablePage {
   route: string;
 }
 
+export interface RelationshipDiagramPage {
+  id: string;
+  connectionId: string;
+  label: string;
+  title: string;
+  route: string;
+}
+
 export interface CreateTableDraftField {
   id: number;
   name: string;
@@ -44,6 +52,7 @@ export class WorkspacePagesService {
   private readonly connections = inject(ConnectionApiService);
   readonly pages = signal<TableSchemaPage[]>([]);
   readonly createTablePages = signal<CreateTablePage[]>([]);
+  readonly relationshipPages = signal<RelationshipDiagramPage[]>([]);
   readonly createTableDrafts = signal<ReadonlyMap<string, CreateTableDraft>>(new Map());
   private readonly currentRoute = signal(this.router.url);
   readonly activePage = computed(() => {
@@ -56,6 +65,11 @@ export class WorkspacePagesService {
     const connectionId = this.connections.activeConnectionId();
     return this.createTablePages().find((page) => page.connectionId === connectionId && page.route === route)
       ?? this.createTablePages().find((page) => page.route === route) ?? null;
+  });
+  readonly activeRelationshipPage = computed(() => {
+    const route = this.currentRoute();
+    const connectionId = this.connections.activeConnectionId();
+    return this.relationshipPages().find((page) => page.connectionId === connectionId && page.route === route) ?? null;
   });
 
   constructor() {
@@ -73,6 +87,58 @@ export class WorkspacePagesService {
   openCreateTable(schema: string): void {
     const page = this.registerOpenedCreateTable(schema, crypto.randomUUID());
     void this.router.navigateByUrl(page.route);
+  }
+
+  openRelationshipDiagram(connectionId: string): void {
+    const page = this.registerOpenedRelationshipDiagram(connectionId);
+    this.connections.selectConnection(connectionId);
+    void this.router.navigateByUrl(page.route);
+  }
+
+  prepareRelationshipDiagram(connectionId: string): void {
+    this.registerOpenedRelationshipDiagram(connectionId);
+    this.connections.selectConnection(connectionId);
+  }
+
+  registerOpenedRelationshipDiagram(connectionId: string): RelationshipDiagramPage {
+    let page = this.relationshipPages().find((candidate) => candidate.connectionId === connectionId);
+    if (!page) {
+      const database = this.connections.connections()
+        .find((connection) => connection.connectionId === connectionId)?.target.database;
+      page = {
+        id: JSON.stringify(['relationships', connectionId]),
+        connectionId,
+        label: database ? `Relationships · ${database}` : 'Relationships',
+        title: `${database ? `${database} · ` : ''}Relationships`,
+        route: '/relationships',
+      };
+      this.relationshipPages.update((pages) => [...pages, page!]);
+    }
+    return page;
+  }
+
+  selectRelationshipPage(page: RelationshipDiagramPage): void {
+    this.connections.selectConnection(page.connectionId);
+    void this.router.navigateByUrl(page.route);
+  }
+
+  closeRelationshipPage(page: RelationshipDiagramPage): void {
+    const wasActive = this.activeRelationshipPage()?.id === page.id;
+    const remaining = this.relationshipPages().filter((candidate) => candidate.id !== page.id);
+    this.relationshipPages.set(remaining);
+    if (!wasActive) return;
+    const nextRelationshipPage = remaining.at(-1);
+    if (nextRelationshipPage) {
+      this.selectRelationshipPage(nextRelationshipPage);
+      return;
+    }
+    const nextTablePage = this.pages().at(-1);
+    if (nextTablePage) this.selectPage(nextTablePage);
+    else {
+      const nextCreatePage = this.createTablePages().at(-1);
+      if (nextCreatePage) this.selectCreateTablePage(nextCreatePage);
+      else void this.router.navigateByUrl('/');
+    }
   }
 
   registerOpenedCreateTable(schema: string, draftId: string = crypto.randomUUID()): CreateTablePage {
@@ -131,6 +197,11 @@ export class WorkspacePagesService {
       this.selectCreateTablePage(nextCreatePage);
       return;
     }
+    const nextRelationshipPage = this.relationshipPages().at(-1);
+    if (nextRelationshipPage) {
+      this.selectRelationshipPage(nextRelationshipPage);
+      return;
+    }
     const nextTablePage = this.pages().at(-1);
     if (nextTablePage) this.selectPage(nextTablePage);
     else void this.router.navigateByUrl('/');
@@ -177,7 +248,11 @@ export class WorkspacePagesService {
     } else {
       const nextCreatePage = this.createTablePages().at(-1);
       if (nextCreatePage) this.selectCreateTablePage(nextCreatePage);
-      else void this.router.navigateByUrl('/');
+      else {
+        const nextRelationshipPage = this.relationshipPages().at(-1);
+        if (nextRelationshipPage) this.selectRelationshipPage(nextRelationshipPage);
+        else void this.router.navigateByUrl('/');
+      }
     }
   }
 
@@ -205,6 +280,41 @@ export class WorkspacePagesService {
     const page = this.pages().find((candidate) => candidate.connectionId === connectionId
       && candidate.schema === schema && candidate.table === table);
     if (page) this.closePage(page);
+  }
+
+  closeConnectionPages(connectionId: string): void {
+    const currentRoute = this.currentRoute();
+    const closesCurrentRoute = this.pages().some((page) => page.connectionId === connectionId && page.route === currentRoute)
+      || this.createTablePages().some((page) => page.connectionId === connectionId && page.route === currentRoute)
+      || this.relationshipPages().some((page) => page.connectionId === connectionId && page.route === currentRoute);
+    this.pages.update((pages) => pages.filter((page) => page.connectionId !== connectionId));
+    this.relationshipPages.update((pages) => pages.filter((page) => page.connectionId !== connectionId));
+    const removedCreatePages = this.createTablePages().filter((page) => page.connectionId === connectionId);
+    const removedIds = new Set(removedCreatePages.map(({ id }) => id));
+    this.createTablePages.update((pages) => pages.filter((page) => page.connectionId !== connectionId));
+    this.createTableDrafts.update((drafts) => {
+      const next = new Map(drafts);
+      for (const id of removedIds) next.delete(id);
+      return next;
+    });
+    if (!closesCurrentRoute) return;
+
+    const nextPage = this.pages().at(-1);
+    if (nextPage) {
+      this.selectPage(nextPage);
+      return;
+    }
+    const nextCreatePage = this.createTablePages().at(-1);
+    if (nextCreatePage) {
+      this.selectCreateTablePage(nextCreatePage);
+      return;
+    }
+    const nextRelationshipPage = this.relationshipPages().at(-1);
+    if (nextRelationshipPage) {
+      this.selectRelationshipPage(nextRelationshipPage);
+      return;
+    }
+    void this.router.navigateByUrl('/');
   }
 
   isActiveTable(connectionId: string, schema: string, table: string): boolean {

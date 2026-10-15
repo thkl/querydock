@@ -136,6 +136,8 @@ The initial Apply contract uses deterministic server-side revalidation rather th
 
 ## 7. Milestone E — Relationship diagram, data browsing, and batch editing
 
+Use the [Milestone E completion checklist](milestone-e-completion-checklist.md) for automated and manual sign-off checks.
+
 ### Deliverables
 
 - Database relationship diagram showing tables and their foreign-key relationships. Users can create, edit, and remove relationships from the diagram; edits remain adapter-validated runbook operations.
@@ -149,6 +151,10 @@ The initial Apply contract uses deterministic server-side revalidation rather th
 - A guided primary-key field picker in the schema grid, using a dropdown or integrated sidebar instead of requiring comma-separated field names.
 - Inline syntax help and examples for CHECK constraint expressions.
 - A visual foreign-key editor in the relationship diagram that guides users to compatible target tables and key fields.
+
+### Candidate scope (to confirm)
+
+- Optional SSO login for access to the QueryDock workbench. Define supported identity providers, user-to-database credential/session behavior, and authorization boundaries before implementation. SSO would identify users to QueryDock; the database adapter must continue to use database credentials and database permissions for database access.
 
 ### Acceptance criteria
 
