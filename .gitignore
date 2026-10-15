@@ -11,3 +11,4 @@ test-results/
 graphify-out/
 .impeccable
 .vscode
+.DS_Store

@@ -100,6 +100,8 @@ export const foreignKeyFieldChoicesSchema = z.object({
   fieldSets: z.array(z.object({
     fieldNames: z.array(z.string()).min(1),
     label: z.string(),
+    compatible: z.boolean(),
+    reason: z.string().nullable(),
   })),
 });
 export type ForeignKeyFieldChoices = z.infer<typeof foreignKeyFieldChoicesSchema>;

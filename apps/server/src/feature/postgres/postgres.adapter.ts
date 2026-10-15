@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { Logger } from '@nestjs/common';
 import { Client } from 'pg';
 import type {
   CreateTableField,
@@ -108,6 +109,8 @@ export class MigrationPlanError extends Error {
 }
 
 export class PostgresAdapter {
+  private readonly logger = new Logger(PostgresAdapter.name);
+
   schemaCapabilities(): SchemaCapabilities {
     return { createTableIfNotExists: true };
   }
@@ -172,7 +175,7 @@ export class PostgresAdapter {
     targetSchema: string,
     targetTable: string,
     localFieldNames: string[],
-  ): Promise<{ fieldSets: { fieldNames: string[]; label: string }[] }> {
+  ): Promise<{ fieldSets: { fieldNames: string[]; label: string; compatible: boolean; reason: string | null }[] }> {
     for (const [name, kind] of [[sourceSchema, 'schema'], [targetSchema, 'schema'], [sourceTable, 'table'], [targetTable, 'table']] as const) {
       validatePostgresIdentifier(name, kind);
     }
@@ -200,13 +203,26 @@ export class PostgresAdapter {
             AND attribute.attnum > 0 AND NOT attribute.attisdropped
         `, [targetSchema, targetTable]),
       ]);
-      if (localTypes.rows.length !== localFieldNames.length) return { fieldSets: [] };
       const localByName = new Map(localTypes.rows.map((field) => [field.name, field.typeName]));
       const targetByName = new Map(targetTypes.rows.map((field) => [field.name, field.typeName]));
       const fieldSets = target.uniqueFieldSets
-        .filter((fields) => fields.length === localFieldNames.length
-          && fields.every((field, index) => typesCanReference(localByName.get(localFieldNames[index]) ?? '', targetByName.get(field) ?? '')))
-        .map((fieldNames) => ({ fieldNames, label: fieldNames.join(', ') }));
+        .map((fieldNames) => {
+          let reason: string | null = null;
+          if (localTypes.rows.length !== localFieldNames.length) {
+            reason = 'One or more selected local fields could not be found. Refresh the source table and try again.';
+          } else if (fieldNames.length !== localFieldNames.length) {
+            reason = `This key contains ${fieldNames.length} field${fieldNames.length === 1 ? '' : 's'}; select the same number of local fields.`;
+          } else {
+            const incompatibleIndex = fieldNames.findIndex((fieldName, index) =>
+              !typesCanReference(localByName.get(localFieldNames[index]) ?? '', targetByName.get(fieldName) ?? ''));
+            if (incompatibleIndex >= 0) {
+              const localField = localFieldNames[incompatibleIndex];
+              const targetField = fieldNames[incompatibleIndex];
+              reason = `Local field "${localField}" (${localByName.get(localField) ?? 'unknown type'}) is not compatible with target field "${targetField}" (${targetByName.get(targetField) ?? 'unknown type'}).`;
+            }
+          }
+          return { fieldNames, label: fieldNames.join(', '), compatible: reason === null, reason };
+        });
       return { fieldSets };
     });
   }
@@ -368,7 +384,7 @@ export class PostgresAdapter {
         if (commitStarted || !rollbackConfirmed) {
           throw new MigrationPlanError('unknown', 'The transaction outcome could not be confirmed. Inspect the database before retrying.');
         }
-        throw new MigrationPlanError('invalid', safeDatabaseMessage(error));
+        throw new MigrationPlanError('invalid', migrationDatabaseMessage(error));
       }
     });
   }
@@ -567,8 +583,14 @@ export class PostgresAdapter {
       return await action(client);
     } catch (error) {
       if (error instanceof MigrationPlanError) throw error;
+      const databaseError = typeof error === 'object' && error !== null
+        ? error as { code?: unknown; message?: unknown }
+        : undefined;
+      const code = typeof databaseError?.code === 'string' ? databaseError.code : 'unknown';
+      const message = typeof databaseError?.message === 'string' ? databaseError.message : 'Unknown PostgreSQL error';
+      this.logger.warn(`PostgreSQL request failed (SQLSTATE/code ${code}): ${message}`);
       throw new PostgresConnectionError(
-        error instanceof Error ? error.message : 'Unknown PostgreSQL error',
+        message,
         safeDatabaseMessage(error),
       );
     } finally {
@@ -746,11 +768,11 @@ async function inspectForeignKeyTarget(
     ORDER BY attribute.attnum
   `, [schema, table]);
   const uniqueResult = await client.query<{ fieldNames: string[] }>(`
-    SELECT ARRAY(SELECT attribute.attname
+    SELECT ARRAY(SELECT attribute.attname::text
       FROM unnest(idx.indkey) WITH ORDINALITY AS key_column(attnum, ordinal)
       JOIN pg_catalog.pg_attribute attribute ON attribute.attrelid = idx.indrelid AND attribute.attnum = key_column.attnum
       WHERE key_column.ordinal <= idx.indnkeyatts
-      ORDER BY key_column.ordinal) AS "fieldNames"
+      ORDER BY key_column.ordinal)::text[] AS "fieldNames"
     FROM pg_catalog.pg_index idx
     JOIN pg_catalog.pg_class relation ON relation.oid = idx.indrelid
     JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace
@@ -1451,16 +1473,35 @@ function constraintKind(
 }
 
 function safeDatabaseMessage(error: unknown): string {
-  const code = typeof error === 'object' && error !== null && 'code' in error
-    ? String(error.code)
-    : '';
+  const details = typeof error === 'object' && error !== null
+    ? error as { code?: unknown; message?: unknown }
+    : undefined;
+  const code = typeof details?.code === 'string' ? details.code : '';
+  const databaseMessage = typeof details?.message === 'string' ? details.message : '';
   if (code === '28P01' || code === '28000') return 'PostgreSQL authentication failed. Check the username and password.';
   if (code === '3D000') return 'The PostgreSQL database was not found. Check the database name.';
   if (code === '42501') return 'The PostgreSQL user does not have permission to inspect this resource.';
   if (code === '42804') return 'The local and referenced foreign-key fields must use compatible PostgreSQL types.';
   if (code === '23503') return 'Existing rows violate the foreign key. Check that each local value has a matching referenced row.';
+  if (code === '42703' && databaseMessage.includes('indnkeyatts')) {
+    return 'This PostgreSQL version does not expose the index metadata needed to list foreign-key target fields. Use PostgreSQL 11 or later.';
+  }
   if (['ECONNREFUSED', 'ENOTFOUND', 'ETIMEDOUT', 'EHOSTUNREACH', 'ENETUNREACH'].includes(code)) {
     return 'Could not reach PostgreSQL. Check the host, port, and server availability.';
   }
+  if (code) return `The PostgreSQL request failed (SQLSTATE ${code}). Check the server version and database permissions.`;
   return 'The PostgreSQL request failed. Check the connection settings and database permissions.';
+}
+
+function migrationDatabaseMessage(error: unknown): string {
+  const details = typeof error === 'object' && error !== null
+    ? error as { code?: unknown; constraint?: unknown }
+    : undefined;
+  if (details?.code === '23514') {
+    const constraint = typeof details.constraint === 'string'
+      ? ` "${details.constraint}"`
+      : '';
+    return `The migration violates CHECK constraint${constraint}: one or more rows do not satisfy its expression. PostgreSQL rolled back the transaction, so none of the migration changes were applied. Update the expression or affected data, then apply again.`;
+  }
+  return safeDatabaseMessage(error);
 }

@@ -4,6 +4,7 @@ import { toSignal } from '@angular/core/rxjs-interop';
 import { combineLatest } from 'rxjs';
 import type {
   EditableConstraintKind,
+  ForeignKeyFieldChoices,
   SchemaFieldDraftRequest,
   SchemaOperation,
   TableConstraintDescriptor,
@@ -60,6 +61,8 @@ interface SchemaConstraintRow {
   drop: boolean;
   status: string;
 }
+
+type ForeignKeyTargetFieldSet = ForeignKeyFieldChoices['fieldSets'][number];
 
 @Component({
   selector: 'qd-table-schema',
@@ -191,6 +194,8 @@ export class TableSchemaComponent {
   readonly error = signal<string | null>(null);
   readonly stagingField = signal(false);
   readonly stageError = signal<string | null>(null);
+  private readonly queuedFieldDrafts = new Map<string, SchemaFieldRow>();
+  private processingFieldDrafts = false;
   readonly renamingTable = signal(false);
   readonly tableNameDraft = signal('');
   readonly fieldTypeOptions = computed(() => (this.snapshot()?.editableFieldTypes ?? [])
@@ -200,8 +205,14 @@ export class TableSchemaComponent {
   readonly foreignKeyLocalFields = signal<string[]>([]);
   readonly foreignKeyTargetSchema = signal('');
   readonly foreignKeyTargetTable = signal('');
-  readonly foreignKeyTargetSets = signal<{ fieldNames: string[]; label: string }[]>([]);
+  readonly foreignKeyTargetSets = signal<ForeignKeyTargetFieldSet[]>([]);
   readonly foreignKeySelectedSet = signal('');
+  readonly selectedForeignKeyTargetSet = computed(() => this.foreignKeyTargetSets()
+    .find(({ fieldNames }) => fieldNames.join('\u0000') === this.foreignKeySelectedSet()) ?? null);
+  readonly foreignKeyTargetProblem = computed(() => {
+    const selected = this.selectedForeignKeyTargetSet();
+    return selected && !selected.compatible ? selected.reason : this.foreignKeyEditorError();
+  });
   readonly foreignKeyEditorName = signal('');
   readonly foreignKeyEditorLoading = signal(false);
   readonly foreignKeyEditorError = signal<string | null>(null);
@@ -435,7 +446,9 @@ export class TableSchemaComponent {
   onFieldRecordEdit(event: RecordEditEvent<SchemaFieldRow>): void {
     const row = event.data;
     if (!row.isGridInput && !row.isUncommitted && !row.editedFields.length) return;
-    void this.stageGridField(row);
+    const key = row.sourceName ?? row.operationName ?? (row.isGridInput ? 'new-field' : row.name);
+    this.queuedFieldDrafts.set(key, row);
+    if (!this.processingFieldDrafts) void this.flushFieldDrafts();
   }
 
   onConstraintCellEdit(event: GridEditEvent<SchemaConstraintRow>): void {
@@ -444,9 +457,11 @@ export class TableSchemaComponent {
     if (!row) return;
     this.stageError.set(null);
     if (row.isGridInput || (row.sourceName === null && row.isUncommitted)) {
+      const kind = event.field === 'kind' ? String(event.newValue) : row.kind;
       this.constraintDatasource.patchRow(event.position.rowIndex, {
+        kind,
         status: row.name.trim() && row.fields.trim()
-          && (row.kind !== 'foreignKey' || row.references.trim()) ? 'READY TO STAGE' : 'FILL REQUIRED FIELDS',
+          && (kind !== 'foreignKey' || row.references.trim()) ? 'READY TO STAGE' : 'FILL REQUIRED FIELDS',
       });
     }
   }
@@ -583,11 +598,26 @@ export class TableSchemaComponent {
     if (rowIndex >= 0) this.constraintDatasource.patchRow(rowIndex, { status });
   }
 
+  private async flushFieldDrafts(): Promise<void> {
+    if (this.processingFieldDrafts) return;
+    this.processingFieldDrafts = true;
+    try {
+      while (this.queuedFieldDrafts.size) {
+        const [key, row] = this.queuedFieldDrafts.entries().next().value as [string, SchemaFieldRow];
+        this.queuedFieldDrafts.delete(key);
+        await this.stageGridField(row);
+      }
+    } finally {
+      this.processingFieldDrafts = false;
+      if (this.queuedFieldDrafts.size) void this.flushFieldDrafts();
+    }
+  }
+
   private async stageGridField(row: SchemaFieldRow): Promise<void> {
     const connection = this.connections.activeConnection();
     const snapshot = this.snapshot();
     this.stageError.set(null);
-    if (this.stagingField() || !connection || !snapshot?.canAlter) return;
+    if (!connection || !snapshot?.canAlter) return;
     this.stagingField.set(true);
     try {
       const draft: SchemaFieldDraftRequest['draft'] = {
@@ -679,7 +709,6 @@ export class TableSchemaComponent {
     const targetSchema = this.foreignKeyTargetSchema();
     const targetTable = this.foreignKeyTargetTable();
     this.foreignKeyTargetSets.set([]);
-    this.foreignKeySelectedSet.set('');
     this.foreignKeyEditorError.set(null);
     if (!row || !connection || !snapshot || !localFieldNames.length || !targetSchema || !targetTable) return;
     this.foreignKeyEditorLoading.set(true);
@@ -688,8 +717,16 @@ export class TableSchemaComponent {
         connection.connectionId, snapshot.schema, snapshot.name, targetSchema, targetTable, localFieldNames,
       );
       this.foreignKeyTargetSets.set(result.fieldSets);
-      this.foreignKeySelectedSet.set(result.fieldSets[0]?.fieldNames.join('\u0000') ?? '');
-      if (!result.fieldSets.length) this.foreignKeyEditorError.set('This table has no primary or unique key with fields compatible with the selected local fields.');
+      const previous = this.foreignKeySelectedSet();
+      const selected = result.fieldSets.find(({ fieldNames, compatible }) =>
+        compatible && fieldNames.join('\u0000') === previous)
+        ?? result.fieldSets.find(({ compatible }) => compatible)
+        ?? result.fieldSets.find(({ fieldNames }) => fieldNames.join('\u0000') === previous)
+        ?? result.fieldSets[0];
+      this.foreignKeySelectedSet.set(selected?.fieldNames.join('\u0000') ?? '');
+      if (!result.fieldSets.length) {
+        this.foreignKeyEditorError.set('The target table has no primary or unique key available to reference.');
+      }
     } catch (error) {
       this.foreignKeyEditorError.set(error instanceof Error ? error.message : 'Unable to load compatible referenced fields.');
     } finally {
@@ -720,8 +757,9 @@ export class TableSchemaComponent {
     const connection = this.connections.activeConnection();
     const snapshot = this.snapshot();
     const selected = this.foreignKeySelectedSet();
-    const referencedFieldNames = this.foreignKeyTargetSets().find(({ fieldNames }) => fieldNames.join('\u0000') === selected)?.fieldNames;
-    if (!row || !connection || !snapshot || !this.foreignKeyLocalFields().length || !referencedFieldNames) return;
+    const selectedTarget = this.foreignKeyTargetSets().find(({ fieldNames }) => fieldNames.join('\u0000') === selected);
+    const referencedFieldNames = selectedTarget?.fieldNames;
+    if (!row || !connection || !snapshot || !this.foreignKeyLocalFields().length || !selectedTarget?.compatible || !referencedFieldNames) return;
     const name = this.foreignKeyEditorName().trim();
     const operation = {
       kind: 'addConstraint' as const,

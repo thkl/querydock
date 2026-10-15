@@ -151,15 +151,31 @@
               <select id="foreign-key-fields" class="editor-input" [value]="foreignKeySelectedSet()"
                 (change)="foreignKeySelectedSet.set($any($event.target).value)">
                 @for (fieldSet of foreignKeyTargetSets(); track fieldSet.fieldNames.join(',')) {
-                  <option [value]="fieldSet.fieldNames.join('\u0000')">{{ fieldSet.label }}</option>
+                  <option [value]="fieldSet.fieldNames.join('\u0000')">
+                    {{ fieldSet.label }}{{ fieldSet.compatible ? ' — compatible' : ' — incompatible' }}
+                  </option>
                 }
               </select>
-              <p class="editor-hint">Only primary and unique keys with adapter-approved field types are listed.</p>
+              <p class="editor-hint">All primary and unique keys on the target table are listed. Incompatible keys include an explanation below.</p>
             }
-            @if (foreignKeyEditorError()) { <p class="editor-error" role="alert">{{ foreignKeyEditorError() }}</p> }
+            @if (foreignKeyTargetProblem()) {
+              <div class="editor-error-row" role="alert">
+                <p class="editor-error">{{ foreignKeyTargetProblem() }}</p>
+                <details class="editor-info">
+                  <summary aria-label="Explain foreign key compatibility requirements" title="Why is this key incompatible?">
+                    <span aria-hidden="true">i</span>
+                  </summary>
+                  <div class="editor-info__content">
+                    <strong>What makes a valid reference?</strong>
+                    <p>The target fields must form a primary key or unique key. Choose the same number of local fields in the same order, with types the database adapter considers compatible.</p>
+                    <p>Example: <code>orders.customer_id</code> can reference <code>customers.id</code> when both fields have compatible types and <code>customers.id</code> is a primary key. A target field with a unique constraint also works. If no matching key exists, add a primary or unique constraint to the target table first, or choose another target.</p>
+                  </div>
+                </details>
+              </div>
+            }
             <footer class="editor-actions">
               <button class="editor-cancel" type="button" (click)="foreignKeyEditor.close()">Cancel</button>
-              <button class="editor-save" type="button" [disabled]="foreignKeyEditorLoading() || !foreignKeySelectedSet() || !foreignKeyEditorName().trim()"
+              <button class="editor-save" type="button" [disabled]="foreignKeyEditorLoading() || !selectedForeignKeyTargetSet()?.compatible || !foreignKeyEditorName().trim()"
                 (click)="saveForeignKeyReference()">Save to runbook</button>
             </footer>
           </aside>

@@ -145,6 +145,10 @@ The initial Apply contract uses deterministic server-side revalidation rather th
 - Safe key-based row identification and concurrency checks.
 - Explicit NULL/default and lossless database value representation.
 - Save to dev or Add to runbook destinations.
+- Named saved connections and explicit connect/disconnect controls, so profiles for the same host but different accounts (for example, read/write and read-only) are easy to distinguish and inactive sessions can be closed deliberately.
+- A guided primary-key field picker in the schema grid, using a dropdown or integrated sidebar instead of requiring comma-separated field names.
+- Inline syntax help and examples for CHECK constraint expressions.
+- A visual foreign-key editor in the relationship diagram that guides users to compatible target tables and key fields.
 
 ### Acceptance criteria
 
@@ -159,6 +163,12 @@ The initial Apply contract uses deterministic server-side revalidation rather th
 - Large integers, decimals, timestamps, JSON, and other selected PostgreSQL types round-trip without silent coercion.
 - Browsed rows/results and ordinary unsaved edits are not written to IndexedDB.
 - Explicit runbook data SQL, including literal values, survives reload.
+- Saved connection names are editable, persist with the encrypted local connection profile, and distinguish profiles even when their host/database values match. Existing unnamed profiles remain usable with a clear fallback label.
+- Users can disconnect a selected active connection without deleting its saved profile; the UI clearly shows the active connection and disconnected state, and its server session/credentials are cleared.
+- When pending schema changes are indicated by an uncommitted badge, an adjacent arrow link opens the runbook directly.
+- Adding a primary key presents the available table fields for selection, supports the adapter's valid key shape, and stages the chosen fields in the runbook.
+- Adding a CHECK constraint explains the expected expression syntax with relevant examples; server-side validation errors identify how to correct invalid expressions.
+- Foreign-key editing shows target primary/unique key sets reported by the adapter, marks compatible choices, explains field-count/type mismatches, and stages only compatible references.
 
 Confirm keyless-table behavior and precise concurrency rules before implementing writes; initially read-only is the recommended fallback.
 
@@ -199,6 +209,8 @@ Define bounded fetch, query timeout, and custom-SQL result behavior before imple
 ## 10. Deferred features
 
 - Diagram view: possible P3.
+- AI-assisted schema drafting: post-MVP idea; see [Post-MVP Ideas](post-mvp-ideas.md).
+- Additional selectable color themes: post-MVP idea; see [Post-MVP Ideas](post-mvp-ideas.md).
 - Additional engines and CSV/SQLite resources.
 - Optimizing exported applied history using starting/final snapshots.
 - Query cancellation, interactive transactions, and persistent session connections.

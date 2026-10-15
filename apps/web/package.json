@@ -3,10 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "start:dev": "ng serve",
-    "start:debug": "ng serve",
-    "build": "ng build",
-    "typecheck": "tsc -p tsconfig.app.json --noEmit",
+    "start:dev": "pnpm --filter @querydock/contracts build && ng serve",
+    "start:debug": "pnpm --filter @querydock/contracts build && ng serve",
+    "build": "pnpm --filter @querydock/contracts build && ng build",
+    "typecheck": "pnpm --filter @querydock/contracts build && tsc -p tsconfig.app.json --noEmit",
     "test": "pnpm -w exec vitest run --config apps/web/vitest.config.mts",
     "test:watch": "pnpm -w exec vitest --config apps/web/vitest.config.mts"
   },
@@ -23,7 +23,7 @@
     "@codemirror/view": "^6.43.14",
     "@lezer/highlight": "^1.2.5",
     "@querydock/contracts": "workspace:*",
-    "@thkl/agrid": "^0.1.24",
+    "@thkl/agrid": "^0.1.26",
     "codemirror": "^6.0.2",
     "rxjs": "^7.8.2",
     "tslib": "^2.8.1",
