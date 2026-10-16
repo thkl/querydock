@@ -57,7 +57,7 @@ h1 {
 .review-badge {
   min-height: 36px;
   padding: 0 12px;
-  font-size: .875em;
+  font-size: 1em;
 }
 
 .review-icon {
@@ -74,7 +74,7 @@ h1 {
   border-radius: 9px;
   background: var(--color-warning-bg);
   color: var(--color-warning);
-  font-size: .875em;
+  font-size: 1em;
   line-height: 1.5;
 }
 
@@ -85,7 +85,7 @@ h1 {
   border-radius: 9px;
   background: var(--color-danger-bg);
   color: var(--color-danger);
-  font-size: .88em;
+  font-size: 1.2em;
   line-height: 1.5;
 }
 
@@ -111,7 +111,7 @@ h1 {
   border: 1px solid var(--color-border);
   border-radius: 8px;
   background: var(--color-surface);
-  font-size: .9em;
+  font-size: 1em;
 }
 
 .runbook-tables {
@@ -259,7 +259,7 @@ h1 {
   border-top: 1px solid var(--color-draft-border);
   background: var(--color-draft-subtle);
   color: var(--color-warning);
-  font-size: .84em;
+  font-size: 1.2em;
   line-height: 1.45;
 }
 
@@ -304,6 +304,8 @@ h1 {
 .runbook-action-group {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  margin-left: auto;
   gap: 10px;
 }
 
@@ -361,6 +363,10 @@ h1 {
   .runbook-action-group {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .runbook-action-group {
+    margin-left: 0;
   }
 
   .preview-status {

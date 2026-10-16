@@ -15,7 +15,7 @@ export const connection = {
 };
 
 export const resources = [
-  { schema: 'public', name: 'customers', kind: 'table', isUpdatable: true },
+  { schema: 'public', name: 'customers', kind: 'table', isUpdatable: true, canCreateTable: true },
 ];
 
 export const editableTypes = [

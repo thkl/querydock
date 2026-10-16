@@ -40,8 +40,8 @@ describe('ConnectionApiService API surface', () => {
       const url = String(input);
       if (url === '/api/connections') return jsonResponse([connection]);
       if (url.endsWith('/resources')) return jsonResponse([
-        { schema: 'public', name: 'people', kind: 'table', isUpdatable: true },
-        { schema: 'audit', name: 'events', kind: 'table', isUpdatable: false },
+        { schema: 'public', name: 'people', kind: 'table', isUpdatable: true, canCreateTable: true },
+        { schema: 'audit', name: 'events', kind: 'table', isUpdatable: false, canCreateTable: false },
       ]);
       return jsonResponse({ message: 'unexpected request' }, 500);
     });
@@ -52,8 +52,8 @@ describe('ConnectionApiService API surface', () => {
     expect(service.activeConnection()).toEqual(connection);
     expect(service.activeResources()).toHaveLength(2);
     expect(service.resourceGroups()).toEqual([
-      { schema: 'public', resources: [expect.objectContaining({ name: 'people' })] },
-      { schema: 'audit', resources: [expect.objectContaining({ name: 'events' })] },
+      { schema: 'public', canCreateTable: true, resources: [expect.objectContaining({ name: 'people' })] },
+      { schema: 'audit', canCreateTable: false, resources: [expect.objectContaining({ name: 'events' })] },
     ]);
     expect(fetchMock).toHaveBeenCalledWith('/api/connections', expect.objectContaining({ credentials: 'same-origin' }));
   });

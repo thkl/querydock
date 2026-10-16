@@ -49,6 +49,7 @@ export const resourceDescriptorSchema = z.object({
   name: z.string(),
   kind: z.enum(['table', 'partitionedTable', 'view', 'materializedView', 'foreignTable']),
   isUpdatable: z.boolean(),
+  canCreateTable: z.boolean(),
 });
 
 export type ResourceDescriptor = z.infer<typeof resourceDescriptorSchema>;

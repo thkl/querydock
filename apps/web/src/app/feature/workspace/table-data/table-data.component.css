@@ -23,6 +23,19 @@
   gap: 18px;
 }
 
+.data-toolbar {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.row-count {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: .88em;
+}
+
 .eyebrow {
   margin: 0 0 8px;
   color: var(--color-accent);

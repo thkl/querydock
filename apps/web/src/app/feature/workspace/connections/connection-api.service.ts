@@ -45,7 +45,11 @@ export class ConnectionApiService {
       group.push(resource);
       groups.set(resource.schema, group);
     }
-    return [...groups].map(([schema, resources]) => ({ schema, resources }));
+    return [...groups].map(([schema, resources]) => ({
+      schema,
+      resources,
+      canCreateTable: resources.some(({ canCreateTable }) => canCreateTable),
+    }));
   });
   readonly connecting = signal(false);
   readonly disconnectingId = signal<string | null>(null);
@@ -208,7 +212,7 @@ export class ConnectionApiService {
     return request<unknown>(`/api/connections/${encodeURIComponent(connectionId)}/migrations/apply`, {
       method: 'POST',
       body: JSON.stringify(plan),
-    }).then(parseMigrationApply);
+    }).then((payload) => parseMigrationApply(payload, plan));
   }
 
   /** Restores the server session after reload and refreshes resources for every connection. */
@@ -231,7 +235,7 @@ export class ConnectionApiService {
   }
 
   /** Replaces the cached resources for a connection and clears its previous load error. */
-  private async loadResources(connectionId: string): Promise<void> {
+  private async loadResources(connectionId: string): Promise<ResourceDescriptor[]> {
     const resources = await request<ResourceDescriptor[]>(
       `/api/connections/${encodeURIComponent(connectionId)}/resources`,
     );
@@ -245,10 +249,11 @@ export class ConnectionApiService {
       next.delete(connectionId);
       return next;
     });
+    return resources;
   }
 
   /** Refreshes a connection's resource cache after a schema change. */
-  refreshResources(connectionId: string): Promise<void> {
+  refreshResources(connectionId: string): Promise<ResourceDescriptor[]> {
     return this.loadResources(connectionId);
   }
 
@@ -305,12 +310,13 @@ function parseMigrationPreview(payload: unknown): MigrationPreviewResponse {
   throw new Error('The server returned an invalid migration preview.');
 }
 
-/** Requires the server to confirm applied SQL and at least one valid table snapshot. */
-function parseMigrationApply(payload: unknown): MigrationApplyResponse {
+/** Validates applied SQL and snapshots, allowing an empty snapshot only for a confirmed table drop. */
+function parseMigrationApply(payload: unknown, plan: MigrationApplyRequest): MigrationApplyResponse {
   const snapshots = isRecord(payload) ? payload['snapshots'] : undefined;
+  const isTableDrop = plan.operations.length === 1 && plan.operations[0]?.kind === 'dropTable';
   if (isRecord(payload)
     && Array.isArray(payload['appliedStatements']) && payload['appliedStatements'].every((statement) => typeof statement === 'string')
-    && Array.isArray(snapshots) && snapshots.length > 0 && snapshots.every((snapshot) => isRecord(snapshot)
+    && Array.isArray(snapshots) && (snapshots.length > 0 || isTableDrop) && snapshots.every((snapshot) => isRecord(snapshot)
       && typeof snapshot['schema'] === 'string'
       && typeof snapshot['name'] === 'string'
       && typeof snapshot['kind'] === 'string'

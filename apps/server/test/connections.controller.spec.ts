@@ -74,7 +74,7 @@ describe('ConnectionsController', () => {
     postgres = {
       verifyConnection: vi.fn().mockResolvedValue({ serverVersion: '16.2' }),
       schemaCapabilities: vi.fn().mockReturnValue({ createTableIfNotExists: true }),
-      listResources: vi.fn().mockResolvedValue([{ schema: 'public', name: 'customers', kind: 'table', isUpdatable: true }]),
+      listResources: vi.fn().mockResolvedValue([{ schema: 'public', name: 'customers', kind: 'table', isUpdatable: true, canCreateTable: false }]),
       editableFieldTypes: vi.fn().mockReturnValue([{ value: 'text', label: 'Text' }]),
       inspectTable: vi.fn().mockResolvedValue({ schema: 'public', name: 'customers' }),
       queryTableData: vi.fn().mockResolvedValue({ columns: [], rows: [], totalRows: 0 }),

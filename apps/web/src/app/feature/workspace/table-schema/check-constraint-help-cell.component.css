@@ -1,0 +1,31 @@
+:host {
+  display: block;
+  min-width: 0;
+}
+
+.check-help-trigger {
+  display: flex;
+  width: 100%;
+  min-height: 28px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 3px 7px;
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  background: var(--color-surface);
+  color: var(--color-accent-strong);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.check-help-trigger:hover,
+.check-help-trigger:focus-visible {
+  border-color: var(--color-accent);
+  outline: none;
+}
+
+.check-help-empty {
+  color: var(--color-muted);
+}

@@ -35,7 +35,7 @@ describe('ConnectionApiService.disconnect', () => {
     const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
       if (url === '/api/connections') return response(connections);
-      if (url.endsWith('/resources')) return response([{ schema: 'public', name: 'orders', kind: 'table', isUpdatable: true }]);
+      if (url.endsWith('/resources')) return response([{ schema: 'public', name: 'orders', kind: 'table', isUpdatable: true, canCreateTable: false }]);
       if (init?.method === 'DELETE') return response(null, 204);
       return response({ message: 'Unexpected request.' }, 500);
     });

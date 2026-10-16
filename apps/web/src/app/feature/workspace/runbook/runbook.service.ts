@@ -360,11 +360,16 @@ export class RunbookService {
     const inFlight = { ...current, applyOutcomeUnknown: true };
     this.setRunbookForTarget(current.target, inFlight);
     await this.persist(inFlight);
+    let serverConfirmedApply = false;
     try {
       const result = await this.connections.applyMigration(connection.connectionId, plan);
+      serverConfirmedApply = true;
       const tableAction = current.operations[0];
       const isDropped = tableAction?.kind === 'dropTable';
       const isRenamed = tableAction?.kind === 'renameTable';
+      if (current.baseline === null || isDropped || isRenamed) {
+        await this.refreshAndConfirmTableChanges(connection.connectionId, current);
+      }
       const updated: SchemaRunbook = {
         ...current,
         table: isRenamed ? tableAction.newName : current.table,
@@ -377,12 +382,8 @@ export class RunbookService {
       };
       this.setRunbookForTarget(current.target, updated);
       await this.persist(updated);
-      if (current.baseline === null || isDropped || isRenamed) {
-        const connectionId = connection.connectionId;
-        await this.connections.refreshResources(connectionId).catch(() => undefined);
-      }
     } catch (error) {
-      if (!isUncertainApplyError(error)) {
+      if (!serverConfirmedApply && !isUncertainApplyError(error)) {
         this.setRunbookForTarget(current.target, current);
         await this.persist(current);
       }
@@ -455,6 +456,7 @@ export class RunbookService {
         if (!allChangesPresent) {
           throw new Error('The database does not contain every expected table from this batch. Keep the outcome unknown and inspect it manually.');
         }
+        await this.refreshAndConfirmTableChanges(connection.connectionId, current);
         const updated: SchemaRunbook = {
           ...current,
           baseline: null,
@@ -490,6 +492,7 @@ export class RunbookService {
       if (outcome === 'applied') {
         const applied = tableOperation.kind === 'dropTable' ? oldSnapshot === null : newSnapshot !== null && oldSnapshot === null;
         if (!applied) throw new Error('The database does not match the expected table rename/drop result. Keep the outcome unknown and inspect it manually.');
+        await this.refreshAndConfirmTableChanges(connection.connectionId, current);
         const updated: SchemaRunbook = {
           ...current, table: newTable ?? oldTable, baseline: tableOperation.kind === 'renameTable' ? newSnapshot : null,
           operations: [], preview: null,
@@ -499,7 +502,6 @@ export class RunbookService {
         this.setRunbookForTarget(current.target, updated);
         this.error.set(null);
         await this.persist(updated);
-        await this.connections.refreshResources(connection.connectionId).catch(() => undefined);
         return;
       }
       if (!oldSnapshot || oldSnapshot.fingerprint !== current.baseline?.fingerprint || newSnapshot) {
@@ -554,6 +556,32 @@ export class RunbookService {
     this.setRunbookForTarget(current.target, updated);
     this.error.set(null);
     await this.persist(updated);
+  }
+
+  /** Refreshes database resources and verifies the visible result of table lifecycle operations. */
+  private async refreshAndConfirmTableChanges(connectionId: string, runbook: SchemaRunbook): Promise<void> {
+    const resources = await this.connections.refreshResources(connectionId);
+    const hasResource = (schema: string, table: string): boolean =>
+      resources.some((resource) => resource.schema === schema && resource.name === table);
+    const operation = runbook.operations[0];
+
+    if (runbook.baseline === null) {
+      const missingTables = runbook.operations
+        .filter((candidate) => candidate.kind === 'createTable' && !hasResource(runbook.schema, candidate.table))
+        .map((candidate) => candidate.kind === 'createTable' ? candidate.table : '');
+      if (missingTables.length) {
+        throw new Error(`The database accepted the create, but the refreshed table list does not contain ${missingTables.join(', ')}. The runbook outcome remains unknown until the resource list confirms the changes.`);
+      }
+      return;
+    }
+
+    if (operation?.kind === 'dropTable' && hasResource(runbook.schema, runbook.table)) {
+      throw new Error(`The database accepted the drop, but the refreshed table list still contains ${runbook.schema}.${runbook.table}. The runbook outcome remains unknown until the resource list confirms its removal.`);
+    }
+    if (operation?.kind === 'renameTable'
+      && (hasResource(runbook.schema, runbook.table) || !hasResource(runbook.schema, operation.newName))) {
+      throw new Error(`The database accepted the rename, but the refreshed table list does not confirm ${runbook.schema}.${operation.newName}. The runbook outcome remains unknown until the resource list confirms the change.`);
+    }
   }
 
   /** Checks a table's existence while treating only API 404 responses as absence. */

@@ -20,7 +20,7 @@ export class RunbookComponent {
   private readonly workspacePages = inject(WorkspacePagesService);
   private readonly connections = inject(ConnectionApiService);
 
-  /** Confirms adapter warnings, applies the batch, and updates renamed/dropped table tabs. */
+  /** Confirms warnings, applies the batch, and synchronizes affected workspace tabs. */
   async apply(): Promise<void> {
     const warnings = this.runbook.runbook()?.preview?.warnings ?? [];
     let acknowledgedWarnings: string[] = [];
@@ -40,6 +40,7 @@ export class RunbookComponent {
       await this.runbook.applyPending(acknowledgedWarnings);
       if (!state) return;
       const connectionId = this.connectionIdFor(state);
+      this.removeAppliedCreateDraftTabs(state, connectionId);
       if (tableOperation?.kind === 'renameTable') {
         const page = connectionId
           ? this.workspacePages.renameTablePage(connectionId, state.schema, state.table, tableOperation.newName)
@@ -81,6 +82,7 @@ export class RunbookComponent {
       await this.runbook.resolveUnknownApply(outcome);
       if (outcome !== 'applied' || !state) return;
       const connectionId = this.connectionIdFor(state);
+      this.removeAppliedCreateDraftTabs(state, connectionId);
       if (tableOperation?.kind === 'renameTable' && connectionId) {
         const page = this.workspacePages.renameTablePage(connectionId, state.schema, state.table, tableOperation.newName);
         if (page) this.workspacePages.selectPage(page);
@@ -102,6 +104,15 @@ export class RunbookComponent {
     });
     if (!confirmed) return;
     void this.runbook.clearRunbook();
+  }
+
+  /** Removes the editor tabs for create operations confirmed by the applied batch. */
+  private removeAppliedCreateDraftTabs(state: SchemaRunbook, connectionId: string | null): void {
+    if (!connectionId) return;
+    const createdTables = state.operations.flatMap((operation) => operation.kind === 'createTable'
+      ? [{ draftId: operation.draftId, table: operation.table }]
+      : []);
+    this.workspacePages.completeCreatedTableDrafts(connectionId, createdTables);
   }
 
   /** Finds the live session connection matching the runbook's database target. */

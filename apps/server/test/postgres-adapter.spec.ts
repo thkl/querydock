@@ -19,7 +19,7 @@ const client = {
 
 function metadataResponses(canAlter = true): void {
   client.query
-    .mockResolvedValueOnce({ rows: [{ schema: 'public', name: 'items', kind: 'table', canAlter, isUpdatable: true }] })
+    .mockResolvedValueOnce({ rows: [{ schema: 'public', name: 'items', kind: 'table', canAlter, isUpdatable: true, canCreateTable: true }] })
     .mockResolvedValueOnce({ rows: [{
       ordinalPosition: 1, name: 'id', typeSchema: 'pg_catalog', typeName: 'int8', dataType: 'bigint',
       characterMaximumLength: null, numericPrecision: 64, numericScale: 0, nullable: false,
@@ -37,7 +37,7 @@ function mockBrowseQueries(total = '1', rows: Record<string, string | null>[] = 
       return { command: sql, rows: [] };
     }
     if (sql.includes('AS "canAlter"')) {
-      return { rows: [{ schema: 'public', name: 'items', kind: 'table', canAlter: true, isUpdatable: true }] };
+      return { rows: [{ schema: 'public', name: 'items', kind: 'table', canAlter: true, isUpdatable: true, canCreateTable: true }] };
     }
     if (sql.includes('columns.ordinal_position')) {
       return { rows: [{
@@ -106,12 +106,12 @@ describe('PostgresAdapter connection and data operations', () => {
 
   it('lists resources using visible relation metadata and returns an empty result unchanged', async () => {
     client.query.mockResolvedValueOnce({ rows: [
-      { schema: 'public', name: 'items', kind: 'table', isUpdatable: true },
-      { schema: 'public', name: 'item_view', kind: 'view', isUpdatable: false },
+      { schema: 'public', name: 'items', kind: 'table', isUpdatable: true, canCreateTable: true },
+      { schema: 'public', name: 'item_view', kind: 'view', isUpdatable: false, canCreateTable: true },
     ] });
     await expect(adapter.listResources(configuration)).resolves.toEqual([
-      { schema: 'public', name: 'items', kind: 'table', isUpdatable: true },
-      { schema: 'public', name: 'item_view', kind: 'view', isUpdatable: false },
+      { schema: 'public', name: 'items', kind: 'table', isUpdatable: true, canCreateTable: true },
+      { schema: 'public', name: 'item_view', kind: 'view', isUpdatable: false, canCreateTable: true },
     ]);
     client.query.mockResolvedValueOnce({ rows: [] });
     await expect(adapter.listResources(configuration)).resolves.toEqual([]);

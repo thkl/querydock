@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, effect, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, ElementRef, computed, effect, inject, signal, viewChild } from '@angular/core';
 import { ActivatedRoute, RouterLink } from '@angular/router';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { combineLatest } from 'rxjs';
@@ -28,6 +28,17 @@ import { WorkspacePagesService } from '../workspace-pages.service';
 import { SchemaBadgeCellComponent } from './schema-badge-cell.component';
 import { ForeignKeyEditorState, type ForeignKeyEditorRow } from './foreign-key-editor-state';
 import { ForeignKeyReferenceCellComponent } from './foreign-key-reference-cell.component';
+import { CheckConstraintEditorState } from './check-constraint-editor-state';
+import { CheckConstraintHelpCellComponent } from './check-constraint-help-cell.component';
+import { CheckConstraintHelperComponent } from './check-constraint-helper.component';
+import { PrimaryKeyEditorState } from './primary-key-editor-state';
+import { PrimaryKeyFieldsCellComponent } from './primary-key-fields-cell.component';
+import { suggestConstraintName } from './constraint-name-suggestion';
+import {
+  TableSchemaShadowStateService,
+  tableSchemaShadowKey,
+  type TemporaryForeignKeyEditor,
+} from './table-schema-shadow-state.service';
 
 interface SchemaFieldRow {
   sourceName: string | null;
@@ -52,6 +63,8 @@ interface SchemaConstraintRow {
   operationName: string | null;
   isUncommitted: boolean;
   isGridInput: boolean;
+  checkHelp?: string;
+  primaryKeyHelp?: string;
   kind: string;
   name: string;
   fields: string;
@@ -68,19 +81,24 @@ type ForeignKeyTargetFieldSet = ForeignKeyFieldChoices['fieldSets'][number];
   selector: 'qd-table-schema',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [AgridComponent, RouterLink],
-  providers: [ForeignKeyEditorState],
+  imports: [AgridComponent, RouterLink, CheckConstraintHelperComponent],
+  providers: [ForeignKeyEditorState, CheckConstraintEditorState, PrimaryKeyEditorState],
   templateUrl: './table-schema.component.html',
   styleUrl: './table-schema.component.css',
 })
 export class TableSchemaComponent {
   private readonly route = inject(ActivatedRoute);
+  private readonly destroyRef = inject(DestroyRef);
   private requestVersion = 0;
 
   readonly connections = inject(ConnectionApiService);
   readonly foreignKeyEditor = inject(ForeignKeyEditorState);
+  readonly checkConstraintEditor = inject(CheckConstraintEditorState);
+  readonly primaryKeyEditor = inject(PrimaryKeyEditorState);
   readonly runbook = inject(RunbookService);
   private readonly workspacePages = inject(WorkspacePagesService);
+  private readonly shadowState = inject(TableSchemaShadowStateService);
+  private activeSchemaDraftKey: string | null = null;
   readonly routeState = toSignal(
     combineLatest([this.route.paramMap, this.route.queryParamMap]),
     { initialValue: [this.route.snapshot.paramMap, this.route.snapshot.queryParamMap] as const },
@@ -116,7 +134,9 @@ export class TableSchemaComponent {
     const pending = this.runbook.runbook();
     const connection = this.connections.activeConnection();
     if (!pending || !connection || !sameTarget(pending.target, connection.target)
-      || pending.schema !== table.schema || pending.table !== table.name) return fields;
+      || pending.schema !== table.schema || pending.table !== table.name) {
+      return this.appendFieldDraft(fields);
+    }
 
     for (const operation of pending.operations) {
       if (operation.kind === 'addNullableField') {
@@ -158,7 +178,7 @@ export class TableSchemaComponent {
         field.status = 'UNCOMMITTED';
       }
     }
-    return fields;
+    return this.appendFieldDraft(fields);
   });
   readonly pendingTableOperation = computed(() => {
     const pending = this.runbook.runbook();
@@ -177,6 +197,16 @@ export class TableSchemaComponent {
     this.toDisplayConstraints(),
   );
   readonly visibleConstraintCount = computed(() => this.displayConstraints().filter(({ drop }) => !drop).length);
+  readonly primaryKeySelectedFields = computed(() => {
+    try { return parseFieldNames(this.primaryKeyEditor.row()?.fields ?? ''); } catch { return []; }
+  });
+  readonly primaryKeySuggestedName = computed(() =>
+    suggestConstraintName('pk', this.primaryKeySelectedFields()[0] ?? ''),
+  );
+  readonly primaryKeyNameSuggestion = signal('');
+  private readonly syncPrimaryKeyNameSuggestion = effect(() =>
+    this.primaryKeyNameSuggestion.set(this.primaryKeySuggestedName()),
+  );
   readonly fieldDatasource = new AgridDataSource<SchemaFieldRow>();
   readonly constraintDatasource = new AgridDataSource<SchemaConstraintRow>();
   readonly editableFieldGridProvider: AgridProvider<SchemaFieldRow>;
@@ -194,10 +224,19 @@ export class TableSchemaComponent {
   readonly error = signal<string | null>(null);
   readonly stagingField = signal(false);
   readonly stageError = signal<string | null>(null);
+  readonly tableRenameError = signal<string | null>(null);
   private readonly queuedFieldDrafts = new Map<string, SchemaFieldRow>();
   private processingFieldDrafts = false;
   readonly renamingTable = signal(false);
   readonly tableNameDraft = signal('');
+  private readonly tableRenameInput = viewChild<ElementRef<HTMLInputElement>>('tableRenameInput');
+  private readonly focusTableRenameInput = effect(() => {
+    const input = this.tableRenameInput();
+    if (this.renamingTable() && input) {
+      input.nativeElement.focus();
+      input.nativeElement.select();
+    }
+  });
   readonly fieldTypeOptions = computed(() => (this.snapshot()?.editableFieldTypes ?? [])
     .map(({ value, label }) => ({ value, label })));
   readonly foreignKeyTargets = computed(() => this.connections.activeResources()
@@ -297,7 +336,7 @@ export class TableSchemaComponent {
       const row = this.foreignKeyEditor.row();
       if (row && row !== this.initializedForeignKeyRow) {
         this.initializedForeignKeyRow = row;
-        this.initializeForeignKeyEditor(row);
+        this.initializeForeignKeyEditor(row, this.currentTemporaryShadow()?.foreignKeyEditor ?? null);
       } else if (!row) {
         this.initializedForeignKeyRow = null;
       }
@@ -307,7 +346,19 @@ export class TableSchemaComponent {
       const connection = this.connections.activeConnection();
       const table = params.get('tableName');
       const schema = query.get('schema') ?? 'public';
+      const nextDraftKey = connection && table
+        ? tableSchemaShadowKey(connection.connectionId, schema, table)
+        : null;
       const version = ++this.requestVersion;
+
+      if (this.activeSchemaDraftKey && this.activeSchemaDraftKey !== nextDraftKey) {
+        this.persistTemporaryDraft(this.activeSchemaDraftKey);
+        this.foreignKeyEditor.close();
+        this.checkConstraintEditor.close();
+        this.primaryKeyEditor.close();
+        this.resetForeignKeyEditor();
+      }
+      this.activeSchemaDraftKey = nextDraftKey;
 
       this.snapshot.set(null);
       this.error.set(null);
@@ -320,7 +371,14 @@ export class TableSchemaComponent {
       this.loading.set(true);
       void this.connections.inspectTable(connection.connectionId, schema, table)
         .then((snapshot) => {
-          if (version === this.requestVersion) this.snapshot.set(snapshot);
+          if (version === this.requestVersion) {
+            this.snapshot.set(snapshot);
+            const savedEditor = this.currentTemporaryShadow()?.foreignKeyEditor;
+            if (savedEditor) this.foreignKeyEditor.open(savedEditor.row);
+            this.fieldDatasource.setData(this.displayFields());
+            this.constraintDatasource.setData(this.displayConstraints());
+            if (this.activeSchemaDraftKey) this.persistTemporaryDraft(this.activeSchemaDraftKey);
+          }
         })
         .catch((error: unknown) => {
           if (version === this.requestVersion) {
@@ -330,6 +388,9 @@ export class TableSchemaComponent {
         .finally(() => {
           if (version === this.requestVersion) this.loading.set(false);
         });
+    });
+    this.destroyRef.onDestroy(() => {
+      if (this.activeSchemaDraftKey) this.persistTemporaryDraft(this.activeSchemaDraftKey);
     });
   }
 
@@ -353,6 +414,7 @@ export class TableSchemaComponent {
       editedFields: [],
       status: 'FILL NAME + TYPE',
     });
+    this.persistActiveShadow();
     this.stageError.set(null);
   }
 
@@ -361,8 +423,16 @@ export class TableSchemaComponent {
     const table = this.snapshot();
     if (!table?.canAlter) return;
     this.tableNameDraft.set(table.name);
+    this.tableRenameError.set(null);
     this.renamingTable.set(true);
     this.stageError.set(null);
+  }
+
+  /** Cancels the inline rename editor without changing the staged schema. */
+  cancelTableRename(): void {
+    if (this.stagingField()) return;
+    this.renamingTable.set(false);
+    this.tableRenameError.set(null);
   }
 
   /** Stages a table rename as a separate runbook lifecycle operation. */
@@ -370,14 +440,15 @@ export class TableSchemaComponent {
     const table = this.snapshot();
     const connection = this.connections.activeConnection();
     const newName = this.tableNameDraft().trim();
-    if (!table || !connection || !newName) return;
+    if (!table || !connection || !newName || newName === table.name) return;
     this.stagingField.set(true);
+    this.tableRenameError.set(null);
     this.stageError.set(null);
     try {
       await this.runbook.stageTableOperation(connection, table, { kind: 'renameTable', newName });
       this.renamingTable.set(false);
     } catch (error) {
-      this.stageError.set(error instanceof Error ? error.message : 'Unable to stage this table rename.');
+      this.tableRenameError.set(error instanceof Error ? error.message : 'Unable to stage this table rename.');
     } finally {
       this.stagingField.set(false);
     }
@@ -436,6 +507,7 @@ export class TableSchemaComponent {
       drop: false,
       status: 'FILL NAME + FIELDS / EXPRESSION',
     });
+    this.persistActiveShadow();
     this.stageError.set(null);
   }
 
@@ -458,6 +530,7 @@ export class TableSchemaComponent {
         ? 'READY TO STAGE'
         : 'FILL NAME + TYPE',
     });
+    this.persistActiveShadow();
   }
 
   /** Converts a completed field row edit into an adapter previewed runbook draft. */
@@ -466,7 +539,13 @@ export class TableSchemaComponent {
     if (!row.isGridInput && !row.isUncommitted && !row.editedFields.length) return;
     const key = row.sourceName ?? row.operationName ?? (row.isGridInput ? 'new-field' : row.name);
     this.queuedFieldDrafts.set(key, row);
+    this.persistActiveShadow();
     if (!this.processingFieldDrafts) void this.flushFieldDrafts();
+  }
+
+  /** Clears a removed unfinished field row from the table shadow. */
+  onFieldRowRemoved(event: RecordEditEvent<SchemaFieldRow>): void {
+    if (event.data.isGridInput) this.persistTemporaryDraft(this.activeSchemaDraftKey, true, false);
   }
 
   /** Applies one constraint-cell edit and synchronizes the foreign-key sidebar. */
@@ -474,20 +553,40 @@ export class TableSchemaComponent {
     if (!['kind', 'name', 'fields'].includes(event.field)) return;
     const row = this.constraintDatasource.rows()[event.position.rowIndex];
     if (!row) return;
+    if (event.field === 'kind' && !['primaryKey', 'Primary key'].includes(String(event.newValue))) {
+      this.closePrimaryKeyEditorFor(row);
+    }
     this.stageError.set(null);
     if (row.isGridInput || (row.sourceName === null && row.isUncommitted)) {
       const kind = event.field === 'kind' ? String(event.newValue) : row.kind;
-      this.constraintDatasource.patchRow(event.position.rowIndex, {
+      const updated = {
+        ...row,
         kind,
-        status: row.name.trim() && row.fields.trim()
+        name: event.field === 'name' ? String(event.newValue ?? '') : row.name,
+        fields: event.field === 'fields' ? String(event.newValue ?? '') : row.fields,
+        status: (event.field === 'name' ? String(event.newValue ?? '') : row.name).trim()
+          && (event.field === 'fields' ? String(event.newValue ?? '') : row.fields).trim()
           && (kind !== 'foreignKey' || row.references.trim()) ? 'READY TO STAGE' : 'FILL REQUIRED FIELDS',
-      });
+      };
+      this.constraintDatasource.patchRow(event.position.rowIndex, updated);
+      const checkRow = this.checkConstraintEditor.row();
+      if (checkRow && this.sameConstraintEditorRow(checkRow, row)) this.checkConstraintEditor.open(updated);
+      const primaryKeyRow = this.primaryKeyEditor.row();
+      if (primaryKeyRow && this.sameConstraintEditorRow(primaryKeyRow, row)) this.primaryKeyEditor.open(updated);
+      this.persistActiveShadow();
     }
   }
 
   /** Stages a completed constraint row or reports why it is not ready. */
   onConstraintRecordEdit(event: RecordEditEvent<SchemaConstraintRow>): void {
     const row = event.data;
+    if (this.checkConstraintEditor.row() && this.sameConstraintEditorRow(this.checkConstraintEditor.row()!, row)) {
+      this.checkConstraintEditor.open(row);
+    }
+    if (this.primaryKeyEditor.row() && this.sameConstraintEditorRow(this.primaryKeyEditor.row()!, row)) {
+      this.primaryKeyEditor.open(row);
+    }
+    this.persistActiveShadow();
     if (row.isGridInput) {
       if (row.name.trim() && row.fields.trim() && (row.kind !== 'foreignKey' || row.references.trim())) {
         void this.stageConstraint(row);
@@ -503,7 +602,12 @@ export class TableSchemaComponent {
   onConstraintRowRemoved(event: RecordEditEvent<SchemaConstraintRow>): void {
     const row = event.data;
     this.closeForeignKeyEditorFor(row);
-    if (row.isGridInput) return;
+    this.closeCheckConstraintEditorFor(row);
+    this.closePrimaryKeyEditorFor(row);
+    if (row.isGridInput) {
+      this.persistTemporaryDraft(this.activeSchemaDraftKey, false, true);
+      return;
+    }
 
     if (row.sourceName !== null && !row.canDrop) {
       this.stageError.set('This constraint cannot be removed with the current database adapter.');
@@ -542,6 +646,138 @@ export class TableSchemaComponent {
     if (matches) this.foreignKeyEditor.close();
   }
 
+  /** Closes the CHECK helper when its constraint row is removed. */
+  private closeCheckConstraintEditorFor(row: SchemaConstraintRow): void {
+    const editing = this.checkConstraintEditor.row();
+    if (!editing) return;
+    const matches = row.sourceName !== null
+      ? editing.sourceName === row.sourceName
+      : editing.sourceName === null
+        && (editing.operationName ?? editing.name) === (row.operationName ?? row.name);
+    if (matches) this.checkConstraintEditor.close();
+  }
+
+  /** Closes the primary-key picker when its constraint row is removed or changed. */
+  private closePrimaryKeyEditorFor(row: SchemaConstraintRow): void {
+    const editing = this.primaryKeyEditor.row();
+    if (!editing) return;
+    const matches = editing.isGridInput
+      ? row.isGridInput
+      : row.sourceName !== null
+        ? editing.sourceName === row.sourceName
+        : editing.sourceName === null
+          && (editing.operationName ?? editing.name) === (row.operationName ?? row.name);
+    if (matches) this.primaryKeyEditor.close();
+  }
+
+  /** Adds or removes a field while retaining its selected composite-key order. */
+  togglePrimaryKeyField(fieldName: string, event: Event): void {
+    const checked = (event.target as HTMLInputElement).checked;
+    const selected = this.primaryKeySelectedFields();
+    const next = checked
+      ? selected.includes(fieldName) ? selected : [...selected, fieldName]
+      : selected.filter((name) => name !== fieldName);
+    this.updatePrimaryKeyFields(next);
+  }
+
+  /** Changes the order of fields in a composite primary key. */
+  movePrimaryKeyField(fieldName: string, offset: -1 | 1): void {
+    const selected = this.primaryKeySelectedFields();
+    const index = selected.indexOf(fieldName);
+    const target = index + offset;
+    if (index < 0 || target < 0 || target >= selected.length) return;
+    const next = [...selected];
+    [next[index], next[target]] = [next[target], next[index]];
+    this.updatePrimaryKeyFields(next);
+  }
+
+  /** Suggests a primary-key name from its first ordered field while the name is blank. */
+  applyPrimaryKeyNameSuggestion(): void {
+    const editorRow = this.primaryKeyEditor.row();
+    const name = this.primaryKeyNameSuggestion().trim();
+    if (!editorRow || editorRow.name.trim() || !name) return;
+    this.applyConstraintNameSuggestion('primaryKey', name);
+  }
+
+  /** Writes a CHECK name suggestion selected by the expression helper into the grid row. */
+  applyCheckConstraintNameSuggestion(name: string): void {
+    const editorRow = this.checkConstraintEditor.row();
+    if (!editorRow || editorRow.name.trim() || !name) return;
+    this.applyConstraintNameSuggestion('check', name);
+  }
+
+  /** Stages the selected primary key through the server preview endpoint. */
+  async stagePrimaryKey(): Promise<void> {
+    const editorRow = this.primaryKeyEditor.row();
+    if (!editorRow || !this.primaryKeySelectedFields().length) return;
+    const row = this.findPrimaryKeyDatasourceRow(editorRow);
+    if (row) await this.stageConstraint(row);
+  }
+
+  /** Writes picker selections into the grid row and immediately preserves the draft. */
+  private updatePrimaryKeyFields(fieldNames: string[]): void {
+    const editorRow = this.primaryKeyEditor.row();
+    if (!editorRow) return;
+    const index = this.findPrimaryKeyDatasourceIndex(editorRow);
+    if (index < 0) return;
+    const row = this.constraintDatasource.rows()[index];
+    const updated = {
+      ...row,
+      fields: formatFieldNames(fieldNames),
+      status: row.name.trim() && fieldNames.length ? 'READY TO STAGE' : 'FILL REQUIRED FIELDS',
+    };
+    this.constraintDatasource.updateRow(index, updated);
+    this.primaryKeyEditor.open(updated);
+    this.persistActiveShadow();
+    this.stageError.set(null);
+  }
+
+  /** Gets the selected primary-key row from the current constraint datasource. */
+  private findPrimaryKeyDatasourceRow(editorRow: { sourceName: string | null; operationName: string | null; name: string; isGridInput: boolean }): SchemaConstraintRow | null {
+    return this.constraintDatasource.rows()[this.findPrimaryKeyDatasourceIndex(editorRow)] ?? null;
+  }
+
+  /** Resolves the primary-key editor row by stable operation identity. */
+  private findPrimaryKeyDatasourceIndex(editorRow: { sourceName: string | null; operationName: string | null; name: string; isGridInput: boolean }): number {
+    return this.constraintDatasource.rows().findIndex((row) => editorRow.isGridInput
+      ? row.isGridInput && ['primaryKey', 'Primary key'].includes(row.kind)
+      : row.sourceName === editorRow.sourceName
+        && (row.operationName ?? row.name) === (editorRow.operationName ?? editorRow.name));
+  }
+
+  /** Writes a suggested name to the matching helper row and preserves the updated draft. */
+  private applyConstraintNameSuggestion(kind: 'check' | 'primaryKey', name: string): void {
+    const editorRow = kind === 'check' ? this.checkConstraintEditor.row() : this.primaryKeyEditor.row();
+    if (!editorRow || editorRow.name.trim()) return;
+    const index = this.constraintDatasource.rows().findIndex((row) => editorRow.isGridInput
+      ? row.isGridInput && row.kind === kind
+      : row.sourceName === editorRow.sourceName
+        && (row.operationName ?? row.name) === (editorRow.operationName ?? editorRow.name));
+    if (index < 0) return;
+    const row = this.constraintDatasource.rows()[index];
+    const updated = {
+      ...row,
+      name,
+      status: row.fields.trim() ? 'READY TO STAGE' : 'FILL REQUIRED FIELDS',
+    };
+    this.constraintDatasource.updateRow(index, updated);
+    if (kind === 'check') this.checkConstraintEditor.open(updated);
+    else this.primaryKeyEditor.open(updated);
+    this.persistActiveShadow();
+    this.stageError.set(null);
+  }
+
+  /** Checks whether a helper still refers to the grid row being edited. */
+  private sameConstraintEditorRow(
+    editorRow: { sourceName: string | null; operationName: string | null; name: string; isGridInput: boolean },
+    row: SchemaConstraintRow,
+  ): boolean {
+    return editorRow.isGridInput
+      ? row.isGridInput
+      : editorRow.sourceName === row.sourceName
+        && (editorRow.operationName ?? editorRow.name) === (row.operationName ?? row.name);
+  }
+
   /** Validates and previews a primary, unique, check, or foreign-key constraint draft. */
   private async stageConstraint(row: SchemaConstraintRow): Promise<void> {
     const connection = this.connections.activeConnection();
@@ -549,8 +785,9 @@ export class TableSchemaComponent {
     if (this.stagingField() || !connection || !snapshot?.canAlter) return;
     let operation: Extract<SchemaOperation, { kind: 'addConstraint' | 'dropConstraint' }> | null = null;
     const replacementName = row.sourceName ?? row.operationName ?? row.name.trim();
+    const isDraftAdd = row.isGridInput || (row.sourceName === null && row.isUncommitted);
 
-    if (row.isGridInput) {
+    if (isDraftAdd) {
       if (!row.name.trim() || !row.fields.trim() || (row.kind === 'foreignKey' && !row.references.trim())) {
         this.stageError.set(row.kind === 'check'
           ? 'Enter a constraint name and a CHECK expression, such as quantity > 0.'
@@ -607,9 +844,21 @@ export class TableSchemaComponent {
     this.stagingField.set(true);
     try {
       await this.runbook.stageSchemaOperation(connection, snapshot, operation, replacementName);
+      if (row.isGridInput) {
+        this.constraintDatasource.setData(this.displayConstraints());
+        this.persistTemporaryDraft(this.activeSchemaDraftKey, false, true);
+      } else {
+        this.constraintDatasource.setData(this.displayConstraints());
+        this.persistActiveShadow();
+      }
+      this.checkConstraintEditor.close();
+      this.primaryKeyEditor.close();
     } catch (error) {
       this.stageError.set(error instanceof Error ? error.message : 'Unable to stage this constraint.');
-      if (row.isGridInput) this.setConstraintDraftStatus(row, 'INVALID');
+      if (row.isGridInput) {
+        this.setConstraintDraftStatus(row, 'INVALID');
+        this.persistActiveShadow();
+      }
     } finally {
       this.stagingField.set(false);
     }
@@ -656,6 +905,13 @@ export class TableSchemaComponent {
         identityGeneration: row.identityGeneration,
       };
       await this.runbook.stageSchemaFieldDraft(connection, snapshot, draft, row.operationName ?? row.sourceName ?? row.name);
+      if (row.isGridInput) {
+        this.fieldDatasource.setData(this.displayFields());
+        this.persistTemporaryDraft(this.activeSchemaDraftKey, true, false);
+      } else {
+        this.fieldDatasource.setData(this.displayFields());
+        this.persistActiveShadow();
+      }
     } catch (error) {
       this.stageError.set(error instanceof Error ? error.message : 'Unable to stage this field.');
     } finally {
@@ -706,6 +962,14 @@ export class TableSchemaComponent {
       { field: 'name', header: 'Name', width: 220, editable: true, cellReadonly: ({ row }: CellReadonlyParams<SchemaConstraintRow>) => row.sourceName !== null },
       { field: 'fields', header: 'Fields / CHECK expression', width: 290, editable: true, cellReadonly: ({ row }: CellReadonlyParams<SchemaConstraintRow>) => row.sourceName !== null },
       { field: 'definition', header: 'Definition', width: 300, editable: false, locked: true },
+      {
+        field: 'checkHelp', header: 'CHECK helper', width: 145, editable: false,
+        cellRendererComponent: CheckConstraintHelpCellComponent,
+      },
+      {
+        field: 'primaryKeyHelp', header: 'Primary key fields', width: 150, editable: false,
+        cellRendererComponent: PrimaryKeyFieldsCellComponent,
+      },
       {
         field: 'references', header: 'Reference', width: 290, editable: false,
         cellRendererComponent: ForeignKeyReferenceCellComponent,
@@ -766,18 +1030,19 @@ export class TableSchemaComponent {
   }
 
   /** Restores target table and field selections when opening an existing foreign key. */
-  private initializeForeignKeyEditor(row: ForeignKeyEditorRow): void {
+  private initializeForeignKeyEditor(row: ForeignKeyEditorRow, saved: TemporaryForeignKeyEditor | null = null): void {
     this.foreignKeyEditorError.set(null);
-    this.foreignKeyEditorName.set(row.name);
-    const parsedLocal = row.fields === '—' ? [] : safeParseFieldNames(row.fields);
+    this.foreignKeyEditorName.set(saved?.name ?? row.name);
+    const parsedLocal = saved?.localFields ?? (row.fields === '—' ? [] : safeParseFieldNames(row.fields));
     this.foreignKeyLocalFields.set(parsedLocal);
     const parsedReference = row.references === '—' ? null : safeParseForeignKeyReference(row.references);
-    const targetSchema = parsedReference?.referencedSchema ?? '';
-    const targetTable = parsedReference?.referencedTable ?? '';
+    const targetSchema = saved?.targetSchema ?? parsedReference?.referencedSchema ?? '';
+    const targetTable = saved?.targetTable ?? parsedReference?.referencedTable ?? '';
     this.foreignKeyTargetSchema.set(targetSchema);
     this.foreignKeyTargetTable.set(targetTable);
+    this.foreignKeySelectedSet.set(saved?.selectedTargetSet ?? '');
     if (targetSchema && targetTable) void this.loadForeignKeyTargetSets().then(() => {
-      const current = parsedReference?.referencedFieldNames.join('\u0000');
+      const current = saved?.selectedTargetSet || parsedReference?.referencedFieldNames.join('\u0000');
       if (current && this.foreignKeyTargetSets().some(({ fieldNames }) => fieldNames.join('\u0000') === current)) {
         this.foreignKeySelectedSet.set(current);
       }
@@ -810,12 +1075,39 @@ export class TableSchemaComponent {
         ? [{ kind: 'dropConstraint' as const, name: row.sourceName }, operation]
         : [operation];
       await this.runbook.stageSchemaOperations(connection, snapshot, replacements, [row.sourceName ?? name]);
+      this.clearTemporaryForeignKeyEditor();
+      if (row.sourceName === null && row.operationName === null) this.clearTemporaryConstraintRow();
       this.foreignKeyEditor.close();
+      this.resetForeignKeyEditor();
     } catch (error) {
       this.foreignKeyEditorError.set(error instanceof Error ? error.message : 'Unable to stage this foreign key.');
     } finally {
       this.stagingField.set(false);
     }
+  }
+
+  /** Copies a helper expression into the selected grid row and runs the normal adapter preview. */
+  applyCheckExpression(expression: string): void {
+    const editorRow = this.checkConstraintEditor.row();
+    if (!editorRow) return;
+    const rows = this.constraintDatasource.rows();
+    const index = rows.findIndex((candidate) => candidate.isGridInput
+      ? editorRow.isGridInput && candidate.kind === editorRow.kind
+      : candidate.sourceName === editorRow.sourceName
+        && candidate.operationName === editorRow.operationName
+        && candidate.name === editorRow.name);
+    if (index < 0) {
+      this.checkConstraintEditor.close();
+      return;
+    }
+    const row = rows[index];
+    const updated: SchemaConstraintRow = {
+      ...row,
+      fields: expression,
+      status: row.name.trim() ? 'READY TO STAGE' : 'ADD CONSTRAINT NAME',
+    };
+    this.constraintDatasource.updateRow(index, updated);
+    void this.stageConstraint(updated);
   }
 
   /** Canonicalizes a field type for identity-generation capability lookup. */
@@ -852,10 +1144,8 @@ export class TableSchemaComponent {
 
     const pending = this.runbook.runbook();
     const connection = this.connections.activeConnection();
-    if (!pending || !connection || !sameTarget(pending.target, connection.target)
-      || pending.schema !== table.schema || pending.table !== table.name) return rows;
-
-    for (const operation of pending.operations) {
+    if (pending && connection && sameTarget(pending.target, connection.target)
+      && pending.schema === table.schema && pending.table === table.name) for (const operation of pending.operations) {
       if (operation.kind === 'addConstraint') {
         rows.push({
           sourceName: null,
@@ -886,7 +1176,88 @@ export class TableSchemaComponent {
         }
       }
     }
+    const draft = this.currentTemporaryShadow();
+    if (draft?.constraintDraftRow) rows.push(draft.constraintDraftRow as SchemaConstraintRow);
     return rows;
+  }
+
+  /** Reads the shadow associated with the currently open table. */
+  private currentTemporaryShadow() {
+    return this.activeSchemaDraftKey ? this.shadowState.get(this.activeSchemaDraftKey) : null;
+  }
+
+  /** Restores the unfinished field input row after the server-backed rows are projected. */
+  private appendFieldDraft(fields: SchemaFieldRow[]): SchemaFieldRow[] {
+    const row = this.currentTemporaryShadow()?.fieldDraftRow as SchemaFieldRow | null | undefined;
+    return row ? [...fields, row] : fields;
+  }
+
+  /** Captures current grid rows and their live/draft/staged lifecycle in the application signal. */
+  private persistActiveShadow(): void {
+    if (this.activeSchemaDraftKey) this.persistTemporaryDraft(this.activeSchemaDraftKey);
+  }
+
+  /** Copies both schema grids and helper selections before navigation or component teardown. */
+  private persistTemporaryDraft(
+    key: string | null,
+    clearFieldDraft = false,
+    clearConstraintDraft = false,
+  ): void {
+    if (!key) return;
+    const previous = this.shadowState.get(key);
+    const fields = this.fieldDatasource.rows();
+    const constraints = this.constraintDatasource.rows();
+    const row = constraints.find((candidate) => candidate.isGridInput);
+    const fieldRow = fields.find((candidate) => candidate.isGridInput);
+    const editorRow = this.foreignKeyEditor.row();
+    const constraintDraftRow = clearConstraintDraft ? null : row ?? previous?.constraintDraftRow ?? null;
+    const fieldDraftRow = clearFieldDraft ? null : fieldRow ?? previous?.fieldDraftRow ?? null;
+    const foreignKeyEditor = editorRow ? {
+      row: { ...editorRow },
+      name: this.foreignKeyEditorName(),
+      localFields: [...this.foreignKeyLocalFields()],
+      targetSchema: this.foreignKeyTargetSchema(),
+      targetTable: this.foreignKeyTargetTable(),
+      selectedTargetSet: this.foreignKeySelectedSet(),
+    } : previous?.foreignKeyEditor ?? null;
+    this.shadowState.save(key, {
+      fields: fields.map((value) => ({ status: this.shadowStatus(value), row: value })),
+      constraints: constraints.map((value) => ({ status: this.shadowStatus(value), row: value })),
+      fieldDraftRow,
+      constraintDraftRow,
+      foreignKeyEditor,
+    });
+  }
+
+  /** Maps row flags to the shadow lifecycle labels exposed to application state. */
+  private shadowStatus(row: { isGridInput: boolean; isUncommitted: boolean }): 'live' | 'draft' | 'staged' {
+    return row.isGridInput ? 'draft' : row.isUncommitted ? 'staged' : 'live';
+  }
+
+  /** Removes only the unfinished constraint row while retaining all other shadow data. */
+  private clearTemporaryConstraintRow(): void {
+    const key = this.activeSchemaDraftKey;
+    if (!key) return;
+    this.persistTemporaryDraft(key, false, true);
+  }
+
+  /** Removes the saved helper state without discarding a separate unfinished grid row. */
+  private clearTemporaryForeignKeyEditor(): void {
+    const key = this.activeSchemaDraftKey;
+    if (!key) return;
+    const current = this.shadowState.get(key);
+    if (current) this.shadowState.save(key, { ...current, foreignKeyEditor: null });
+  }
+
+  /** Resets editor controls after leaving a table so they cannot bleed into another schema. */
+  private resetForeignKeyEditor(): void {
+    this.foreignKeyLocalFields.set([]);
+    this.foreignKeyTargetSchema.set('');
+    this.foreignKeyTargetTable.set('');
+    this.foreignKeyTargetSets.set([]);
+    this.foreignKeySelectedSet.set('');
+    this.foreignKeyEditorName.set('');
+    this.foreignKeyEditorError.set(null);
   }
 
   /** Checks whether a baseline constraint has a pending drop operation. */

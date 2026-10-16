@@ -151,6 +151,7 @@ Use the [Milestone E completion checklist](milestone-e-completion-checklist.md) 
 - A guided primary-key field picker in the schema grid, using a dropdown or integrated sidebar instead of requiring comma-separated field names.
 - Inline syntax help and examples for CHECK constraint expressions.
 - A visual foreign-key editor in the relationship diagram that guides users to compatible target tables and key fields.
+- A additional MS SQLServer Adapter to confirm the app is multi database ready.
 
 ### Candidate scope (to confirm)
 

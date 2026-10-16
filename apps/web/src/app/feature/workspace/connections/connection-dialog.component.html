@@ -58,7 +58,7 @@
         } @else {
           <p class="vault-copy">Unlocked for this page session. Saved connection details are decrypted in memory until you lock the vault or close this page.</p>
           @if (vault.profiles().length) {
-            <ul class="saved-connections">
+            <ul class="saved-connections scrollbar">
               @for (profile of vault.profiles(); track profile.id) {
                 <li class="saved-connection">
                   <div class="saved-connection-details">

@@ -305,6 +305,25 @@ export class WorkspacePagesService {
     else void this.router.navigateByUrl('/');
   }
 
+  /** Removes successfully created table drafts and their saved editor state after Apply. */
+  completeCreatedTableDrafts(
+    connectionId: string,
+    createdTables: { draftId?: string; table: string }[],
+  ): void {
+    if (!createdTables.length) return;
+    const completedPages = this.createTablePages().filter((page) => createdTables.some(({ draftId, table }) => draftId
+      ? page.id === draftId
+      : page.connectionId === connectionId && this.createTableDraft(page.id)?.tableName.trim() === table));
+    const completedIds = new Set(completedPages.map(({ id }) => id));
+
+    this.createTablePages.update((pages) => pages.filter((page) => !completedIds.has(page.id)));
+    this.createTableDrafts.update((drafts) => {
+      const next = new Map(drafts);
+      for (const id of completedIds) next.delete(id);
+      return next;
+    });
+  }
+
   /** Creates or reuses the schema tab identified by connection, schema, and table. */
   registerOpenedTableSchema(connectionId: string, schema: string, table: string): TableSchemaPage {
     const id = JSON.stringify([connectionId, schema, table]);

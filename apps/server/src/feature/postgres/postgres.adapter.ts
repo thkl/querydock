@@ -27,9 +27,10 @@ interface ResourceRow {
   name: string;
   kind: ResourceDescriptor['kind'];
   isUpdatable: boolean;
+  canCreateTable: boolean;
 }
 
-interface InspectedResourceRow extends ResourceRow {
+interface InspectedResourceRow extends Omit<ResourceRow, 'canCreateTable'> {
   canAlter: boolean;
 }
 
@@ -84,6 +85,14 @@ interface ConstraintRow {
   referencedSchema: string | null;
   referencedTable: string | null;
   referencedFieldNames: string[];
+}
+
+interface ForeignKeyTypeRow {
+  name: string;
+  typeName: string;
+  collationSchema: string | null;
+  collationName: string | null;
+  collationDeterministic: boolean | null;
 }
 
 export interface VerifiedPostgresConnection {
@@ -149,7 +158,8 @@ export class PostgresAdapter {
             WHEN 'm' THEN 'materializedView'
             WHEN 'f' THEN 'foreignTable'
           END AS kind,
-          COALESCE(information_table.is_insertable_into = 'YES', false) AS "isUpdatable"
+          COALESCE(information_table.is_insertable_into = 'YES', false) AS "isUpdatable",
+          pg_catalog.has_schema_privilege(current_user, namespace.oid, 'CREATE') AS "canCreateTable"
         FROM pg_catalog.pg_class AS relation
         JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = relation.relnamespace
         LEFT JOIN information_schema.tables AS information_table
@@ -257,24 +267,38 @@ export class PostgresAdapter {
       const target = await inspectForeignKeyTarget(client, targetSchema, targetTable);
       if (!target || (target.kind !== 'table' && target.kind !== 'partitionedTable')) return { fieldSets: [] };
       const [localTypes, targetTypes] = await Promise.all([
-        client.query<{ name: string; typeName: string }>(`
-          SELECT attribute.attname AS name, pg_catalog.format_type(attribute.atttypid, attribute.atttypmod) AS "typeName"
+        client.query<ForeignKeyTypeRow>(`
+          SELECT attribute.attname AS name,
+            pg_catalog.format_type(attribute.atttypid, attribute.atttypmod) AS "typeName",
+            collation_namespace.nspname AS "collationSchema",
+            collation.collname AS "collationName",
+            collation.collisdeterministic AS "collationDeterministic"
           FROM pg_catalog.pg_class relation
           JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace
           JOIN pg_catalog.pg_attribute attribute ON attribute.attrelid = relation.oid
+          LEFT JOIN pg_catalog.pg_collation collation ON collation.oid = attribute.attcollation
+          LEFT JOIN pg_catalog.pg_namespace collation_namespace ON collation_namespace.oid = collation.collnamespace
           WHERE namespace.nspname = $1 AND relation.relname = $2
             AND attribute.attnum > 0 AND NOT attribute.attisdropped AND attribute.attname = ANY($3::text[])
         `, [sourceSchema, sourceTable, localFieldNames]),
-        client.query<{ name: string; typeName: string }>(`
-          SELECT attribute.attname AS name, pg_catalog.format_type(attribute.atttypid, attribute.atttypmod) AS "typeName"
+        client.query<ForeignKeyTypeRow>(`
+          SELECT attribute.attname AS name,
+            pg_catalog.format_type(attribute.atttypid, attribute.atttypmod) AS "typeName",
+            collation_namespace.nspname AS "collationSchema",
+            collation.collname AS "collationName",
+            collation.collisdeterministic AS "collationDeterministic"
           FROM pg_catalog.pg_class relation
           JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace
           JOIN pg_catalog.pg_attribute attribute ON attribute.attrelid = relation.oid
+          LEFT JOIN pg_catalog.pg_collation collation ON collation.oid = attribute.attcollation
+          LEFT JOIN pg_catalog.pg_namespace collation_namespace ON collation_namespace.oid = collation.collnamespace
           WHERE namespace.nspname = $1 AND relation.relname = $2
             AND attribute.attnum > 0 AND NOT attribute.attisdropped
         `, [targetSchema, targetTable]),
       ]);
       const localByName = new Map(localTypes.rows.map((field) => [field.name, field.typeName]));
+      const localMetadataByName = new Map(localTypes.rows.map((field) => [field.name, field]));
+      const targetMetadataByName = new Map(targetTypes.rows.map((field) => [field.name, field]));
       const targetByName = new Map(targetTypes.rows.map((field) => [field.name, field.typeName]));
       const fieldSets = target.uniqueFieldSets
         .map((fieldNames) => {
@@ -285,11 +309,20 @@ export class PostgresAdapter {
             reason = `This key contains ${fieldNames.length} field${fieldNames.length === 1 ? '' : 's'}; select the same number of local fields.`;
           } else {
             const incompatibleIndex = fieldNames.findIndex((fieldName, index) =>
-              !typesCanReference(localByName.get(localFieldNames[index]) ?? '', targetByName.get(fieldName) ?? ''));
+              !typesCanReference(
+                localMetadataByName.get(localFieldNames[index]) ?? null,
+                targetMetadataByName.get(fieldName) ?? null,
+              ));
             if (incompatibleIndex >= 0) {
               const localField = localFieldNames[incompatibleIndex];
               const targetField = fieldNames[incompatibleIndex];
-              reason = `Local field "${localField}" (${localByName.get(localField) ?? 'unknown type'}) is not compatible with target field "${targetField}" (${targetByName.get(targetField) ?? 'unknown type'}).`;
+              const localMetadata = localMetadataByName.get(localField);
+              const targetMetadata = targetMetadataByName.get(targetField);
+              const sameType = localMetadata && targetMetadata
+                && typeNamesCanReference(localMetadata.typeName, targetMetadata.typeName);
+              reason = sameType
+                ? `Local field "${localField}" and target field "${targetField}" use incompatible collations for a foreign key.`
+                : `Local field "${localField}" (${localByName.get(localField) ?? 'unknown type'}) is not compatible with target field "${targetField}" (${targetByName.get(targetField) ?? 'unknown type'}).`;
             }
           }
           return { fieldNames, label: fieldNames.join(', '), compatible: reason === null, reason };
@@ -822,22 +855,47 @@ async function validateForeignKeyTargets(
     if (missingField) {
       throw new MigrationPlanError('invalid', `The referenced field "${missingField}" does not exist on "${operation.referencedSchema}.${operation.referencedTable}".`);
     }
-    const referencedTypeResult = await client.query<{ name: string; typeName: string }>(`
-      SELECT attribute.attname AS name, pg_catalog.format_type(attribute.atttypid, attribute.atttypmod) AS "typeName"
+    const referencedTypeResult = await client.query<ForeignKeyTypeRow>(`
+      SELECT attribute.attname AS name,
+        pg_catalog.format_type(attribute.atttypid, attribute.atttypmod) AS "typeName",
+        collation_namespace.nspname AS "collationSchema",
+        collation.collname AS "collationName",
+        collation.collisdeterministic AS "collationDeterministic"
       FROM pg_catalog.pg_class relation
       JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace
       JOIN pg_catalog.pg_attribute attribute ON attribute.attrelid = relation.oid
+      LEFT JOIN pg_catalog.pg_collation collation ON collation.oid = attribute.attcollation
+      LEFT JOIN pg_catalog.pg_namespace collation_namespace ON collation_namespace.oid = collation.collnamespace
       WHERE namespace.nspname = $1 AND relation.relname = $2
         AND attribute.attnum > 0 AND NOT attribute.attisdropped AND attribute.attname = ANY($3::text[])
     `, [operation.referencedSchema, operation.referencedTable, operation.referencedFieldNames]);
     const referencedTypes = new Map(referencedTypeResult.rows.map((field) => [field.name, field.typeName]));
+    const referencedMetadata = new Map(referencedTypeResult.rows.map((field) => [field.name, field]));
+    const localTypeResult = await client.query<ForeignKeyTypeRow>(`
+      SELECT attribute.attname AS name,
+        pg_catalog.format_type(attribute.atttypid, attribute.atttypmod) AS "typeName",
+        collation_namespace.nspname AS "collationSchema",
+        collation.collname AS "collationName",
+        collation.collisdeterministic AS "collationDeterministic"
+      FROM pg_catalog.pg_class relation
+      JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace
+      JOIN pg_catalog.pg_attribute attribute ON attribute.attrelid = relation.oid
+      LEFT JOIN pg_catalog.pg_collation collation ON collation.oid = attribute.attcollation
+      LEFT JOIN pg_catalog.pg_namespace collation_namespace ON collation_namespace.oid = collation.collnamespace
+      WHERE namespace.nspname = $1 AND relation.relname = $2
+        AND attribute.attnum > 0 AND NOT attribute.attisdropped AND attribute.attname = ANY($3::text[])
+    `, [source.schema, source.name, operation.fieldNames]);
+    const localMetadata = new Map(localTypeResult.rows.map((field) => [field.name, field]));
     for (let index = 0; index < operation.fieldNames.length; index += 1) {
       const localField = operation.fieldNames[index];
       const referencedField = operation.referencedFieldNames[index];
-      const localType = source.fields.find(({ name }) => name === localField)?.typeName ?? '';
+      const localType = localMetadata.get(localField)?.typeName ?? source.fields.find(({ name }) => name === localField)?.typeName ?? '';
       const referencedType = referencedTypes.get(referencedField) ?? '';
-      if (!typesCanReference(localType, referencedType)) {
-        throw new MigrationPlanError('invalid', `The local field "${localField}" (${localType}) cannot reference "${operation.referencedSchema}.${operation.referencedTable}.${referencedField}" (${referencedType}). Choose fields with compatible PostgreSQL types.`);
+      if (!typesCanReference(localMetadata.get(localField) ?? null, referencedMetadata.get(referencedField) ?? null)) {
+        const reason = typeNamesCanReference(localType, referencedType)
+          ? 'Their collations are incompatible for a foreign key.'
+          : 'Choose fields with compatible PostgreSQL types.';
+        throw new MigrationPlanError('invalid', `The local field "${localField}" (${localType}) cannot reference "${operation.referencedSchema}.${operation.referencedTable}.${referencedField}" (${referencedType}). ${reason}`);
       }
     }
     const requested = [...operation.referencedFieldNames].sort().join('\u0000');
@@ -898,7 +956,15 @@ async function inspectForeignKeyTarget(
 }
 
 /** Applies PostgreSQL adapter compatibility rules to a local/reference type pair. */
-function typesCanReference(localType: string, targetType: string): boolean {
+function typesCanReference(local: ForeignKeyTypeRow | null, target: ForeignKeyTypeRow | null): boolean {
+  if (!local || !target || !typeNamesCanReference(local.typeName, target.typeName)) return false;
+  if (local.collationDeterministic === null || target.collationDeterministic === null) return true;
+  if (local.collationDeterministic && target.collationDeterministic) return true;
+  return local.collationSchema === target.collationSchema && local.collationName === target.collationName;
+}
+
+/** Applies PostgreSQL type-family compatibility rules independently of collation. */
+function typeNamesCanReference(localType: string, targetType: string): boolean {
   const normalize = (type: string) => type.toLowerCase().replace(/\([^)]*\)/g, '').trim();
   const canonical = (type: string) => ({
     int2: 'smallint', int4: 'integer', int8: 'bigint', varchar: 'character varying',
@@ -1677,11 +1743,17 @@ function safeDatabaseMessage(error: unknown): string {
   return 'The PostgreSQL request failed. Check the connection settings and database permissions.';
 }
 
-/** Adds transaction rollback guidance for migration constraint violations. */
+/** Maps known migration failures to actionable messages with rollback guidance. */
 function migrationDatabaseMessage(error: unknown): string {
   const details = typeof error === 'object' && error !== null
-    ? error as { code?: unknown; constraint?: unknown }
+    ? error as { code?: unknown; constraint?: unknown; detail?: unknown }
     : undefined;
+  if (details?.code === '2BP01') {
+    const dependency = typeof details.detail === 'string' && details.detail.length
+      ? ` PostgreSQL reports: ${details.detail}`
+      : '';
+    return `PostgreSQL refused to drop this object because other database objects depend on it.${dependency} The migration was rolled back, so none of its changes were applied. Review the dependent objects, remove or change them explicitly in the Runbook, then generate a fresh preview and apply again. QueryDock does not add CASCADE automatically.`;
+  }
   if (details?.code === '23514') {
     const constraint = typeof details.constraint === 'string'
       ? ` "${details.constraint}"`

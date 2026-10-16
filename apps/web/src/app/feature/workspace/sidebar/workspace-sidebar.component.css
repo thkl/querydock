@@ -301,6 +301,15 @@
     opacity: .8;
 }
 
+.schema-readonly{
+    display: inline-grid;
+    width: 24px;
+    height: 24px;
+    flex: 0 0 24px;
+    place-items: center;
+    margin-left: auto;
+}
+
 .schema-row:hover .schema-add-table,
 .schema-add-table:focus-visible {
     border-color: var(--color-border);

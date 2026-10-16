@@ -49,6 +49,7 @@ If the tables are in another schema, use that schema instead of `public` for bot
 - [OK] **[MANUAL]** Check adapter rules with representative cases: `text` with a size is rejected with an explanation; `varchar` length and `numeric` precision/scale are accepted when valid; identity is available only for supported integer types and rejects incompatible defaults/nullability.
 - [OK] **[MANUAL]** Test a field conversion against populated rows. Risky or failing conversions produce a clear warning/error, retain the pending plan after a confirmed rollback, and never imply success.
 - [ok] **[MANUAL]** Create two tables in one runbook, including `CREATE TABLE IF NOT EXISTS`. Review the warning that an existing table is not structurally compared, apply, and inspect both tables in PostgreSQL.
+- [OK] **[MANUAL]** After Apply confirms a new table, verify its “New table (…)” draft tab and saved editor state are removed. Open the created table’s schema from the connection tree.
 - [OK] **[MANUAL]** Try a duplicate table/field name and invalid type parameters. The server blocks staging/apply with a specific correction message.
 
 ## Constraints and table lifecycle
@@ -57,16 +58,11 @@ If the tables are in another schema, use that schema instead of `public` for bot
 - [OK] **[MANUAL]** Add a CHECK constraint. Verify existing-row risk is called out and invalid data is rejected by PostgreSQL without a partial migration.
 - [OK] **[MANUAL]** Add a foreign key using the integrated reference editor. The target table and compatible primary/unique fields are adapter-provided; missing fields, non-unique targets, and incompatible types are rejected before Apply.
 - [OK] **[MANUAL]** Delete an existing constraint row to stage its removal, then delete the pending-drop row again to cancel. Remove a foreign key and verify its reference sidebar closes.
-- [OK] **[MANUAL]** Rename a table. Review the generated statement, apply it, and verify its open workspace tab follows the new name. Try a conflicting destination name and confirm the server blocks it.
-- [OK] **[MANUAL]** Stage a table drop. The runbook shows the exact SQL and requires explicit warning acknowledgement before Apply. Verify the table and its data are gone afterward.
-
-Note -> The server did not return a valid confirmation for the migration. - i had to verify the table was gone manually . so maybe we need to send the client a complete list of the existing tables after a drop
+- [OK] **[MANUAL]** Rename a table from the pencil beside the schema heading. Save stages the rename, Cancel leaves the draft unchanged, and Runbook shows the generated statement. Apply and verify the table and open workspace tab use the new name; try a conflicting destination and confirm the server blocks it.
+- [OK] **[MANUAL]** Stage a table drop. The runbook shows the exact SQL and requires explicit warning acknowledgement before Apply. After Apply, the refreshed resource list confirms the table is gone, the pending migration clears automatically, and the table disappears from the connection tree.
 
 - [OK] **[MANUAL]** Attempt to drop a table with dependent objects. PostgreSQL blocks the restricted drop; the UI explains the failure, leaves the migration unapplied, and does not use `CASCADE` implicitly.
 - [OK] **[MANUAL]** Cancel/discard staged rename/drop and confirm the database and open tabs still represent the original table.
-
-Note: for the cancel/discard test i had to create a new table .. but the new table tab was still open after applying the runbook, even the table show'd up as created in the tree
-
 
 ## Runbook, drift, and safety
 

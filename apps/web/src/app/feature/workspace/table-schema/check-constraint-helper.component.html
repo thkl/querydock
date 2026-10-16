@@ -1,0 +1,58 @@
+<aside class="check-helper" aria-labelledby="check-helper-title">
+  <header class="check-helper__header">
+    <div>
+      <p class="eyebrow">CHECK CONSTRAINT</p>
+      <h3 id="check-helper-title">Build an expression</h3>
+    </div>
+    <button class="helper-close" type="button" aria-label="Close CHECK helper" (click)="closed.emit()">×</button>
+  </header>
+
+  <p class="helper-copy">Editing <strong>{{ row().name || 'new CHECK constraint' }}</strong>. A CHECK expression
+    must return true or NULL for each row. Choose a field and insert a starting expression, then adjust it in the grid.</p>
+
+  @if (!row().name.trim() && suggestedConstraintName()) {
+  <div class="helper-name-suggestion">
+    <label for="check-helper-name-suggestion">Constraint name suggestion</label>
+    <input id="check-helper-name-suggestion" [value]="suggestedNameDraft()"
+      (input)="suggestedNameDraft.set($any($event.target).value)" />
+    <button type="button" [disabled]="!suggestedNameDraft().trim()" (click)="useSuggestedName()">Use name</button>
+  </div>
+  }
+
+  <label class="helper-label" for="check-helper-field">Field</label>
+  <select id="check-helper-field" class="helper-input" [value]="selectedField()"
+    (change)="selectedField.set($any($event.target).value)">
+    <option value="">Select a field…</option>
+    @for (field of fields(); track field.name) {
+    <option [value]="field.name">{{ field.name }} · {{ field.dataType }}</option>
+    }
+  </select>
+
+  <section class="helper-examples" aria-label="Expression examples">
+    <h4>Insert a starting expression</h4>
+    <button type="button" class="helper-example" [disabled]="!selectedField()"
+      (click)="useExample('IS NOT NULL')">
+      <span>Require a value</span><code>{{ quotedField() }} IS NOT NULL</code>
+    </button>
+    @if (selectedFieldIsNumeric()) {
+    <button type="button" class="helper-example" [disabled]="!selectedField()" (click)="usePositiveExample()">
+      <span>Require a positive number</span><code>{{ quotedField() }} &gt; 0</code>
+    </button>
+    <button type="button" class="helper-example" [disabled]="!selectedField()" (click)="useNumberListExample()">
+      <span>Allow selected numbers</span><code>{{ quotedField() }} IN (1, 2)</code>
+    </button>
+    } @else if (selectedFieldIsText()) {
+    <button type="button" class="helper-example" [disabled]="!selectedField()" (click)="useTextListExample()">
+      <span>Allow selected values</span><code>{{ quotedField() }} IN ('draft', 'sent')</code>
+    </button>
+    } @else if (selectedFieldIsBoolean()) {
+    <button type="button" class="helper-example" [disabled]="!selectedField()" (click)="useTrueExample()">
+      <span>Require true</span><code>{{ quotedField() }} = TRUE</code>
+    </button>
+    }
+  </section>
+
+  <p class="helper-note">The helper puts the expression into the grid. QueryDock adds the <code>CHECK (...)</code>
+    wrapper. PostgreSQL does not allow a CHECK expression to enforce conditions across other rows or tables.</p>
+  <button class="helper-close-action" type="button" (click)="closed.emit()">Done</button>
+</aside>

@@ -1,0 +1,8 @@
+@if (canOpen()) {
+<button class="check-help-trigger" type="button" (click)="open($event)"
+  [attr.aria-label]="'Open CHECK expression helper for ' + (row().name || 'new constraint')">
+  <span>Expression help</span><span aria-hidden="true">↗</span>
+</button>
+} @else {
+<span class="check-help-empty">—</span>
+}

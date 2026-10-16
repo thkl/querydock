@@ -1,33 +1,36 @@
 import { ChangeDetectionStrategy, Component, effect, inject, signal } from '@angular/core';
-import { ActivatedRoute } from '@angular/router';
+import { ActivatedRoute, Router } from '@angular/router';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { combineLatest } from 'rxjs';
 import type { TableDataQueryRequest, TableDataQueryResponse } from '@querydock/contracts';
 import {
   AgridComponent,
   AgridControl,
+  AgridDataSource,
   AgridProvider,
-  AgridServerSideRowModel,
-  type AgridServerSideRequest,
+  type AgridServerQuery,
   type ColDef,
   type ColumnFilter,
 } from '@thkl/agrid';
 import { ConnectionApiService } from '../connections/connection-api.service';
+import { WorkspaceHomeComponent } from '../workspace-home/workspace-home.component';
 import { WorkspacePagesService } from '../workspace-pages.service';
 
 type TableDataRow = Record<string, string | null>;
 type TableDataFilter = TableDataQueryRequest['filters'][number];
+const PAGE_SIZE = 50;
 
 @Component({
   selector: 'qd-table-data',
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [AgridComponent],
+  imports: [AgridComponent, WorkspaceHomeComponent],
   templateUrl: './table-data.component.html',
   styleUrl: './table-data.component.css',
 })
 export class TableDataComponent {
   private readonly route = inject(ActivatedRoute);
+  private readonly router = inject(Router);
   private readonly workspacePages = inject(WorkspacePagesService);
   readonly connections = inject(ConnectionApiService);
   readonly routeState = toSignal(
@@ -36,12 +39,14 @@ export class TableDataComponent {
   );
   readonly error = signal<string | null>(null);
   readonly loaded = signal(false);
+  readonly totalRows = signal(0);
   private id = signal<string | null>(null);
   private requestVersion = 0;
+  private lastGridCriteria = '';
   private currentColumns: TableDataQueryResponse['columns'] = [];
+  readonly gridControl = new AgridControl({ allowRowReorder: false, pageSize: PAGE_SIZE });
   private gridState = this.createGridState();
   readonly provider = signal(this.gridState.provider);
-  readonly gridControl = new AgridControl({ allowRowReorder: false, pageSize: 20 });
 
   /** Rebuilds the table data provider for route/connection changes and registers its tab. */
   constructor() {
@@ -54,34 +59,46 @@ export class TableDataComponent {
       this.id.set(`${schema}.${table}`);
       this.error.set(null);
       this.loaded.set(false);
+      this.totalRows.set(0);
+      this.lastGridCriteria = '';
       this.currentColumns = [];
+      this.gridControl.setPage(1);
       this.gridState = this.createGridState();
       this.provider.set(this.gridState.provider);
-      console.log(`Loading ${schema}.${table}`)
-      if (!connection || !table || !connection.capabilities.browseData) return;
+      if (!connection) {
+        if (this.connections.sessionRestoreComplete()) void this.router.navigateByUrl('/');
+        return;
+      }
+      if (!table || !connection.capabilities.browseData) return;
       this.workspacePages.registerOpenedTableData(connection.connectionId, schema, table);
     });
+    effect(() => {
+      const gridProvider = this.provider();
+      const query = gridProvider.serverQuery();
+      if (!query) return;
+      void this.loadRows(query, gridProvider);
+    });
   }
 
-  /** Reloads the current server-side grid page and clears the previous error notice. */
+  /** Reloads the current aGrid query without changing its page or filter state. */
   refresh(): void {
+    const gridProvider = this.provider();
+    const query = gridProvider.serverQuery();
+    if (!query) return;
     this.error.set(null);
-    this.gridState.rowModel.refresh({ purge: true });
+    this.loaded.set(false);
+    void this.loadRows(query, gridProvider);
   }
 
-  /** Creates a read-only paged grid provider bound to the current route and connection. */
+  /** Creates a read-only grid with aGrid's native server paging and query controls. */
   private createGridState(): {
-    rowModel: AgridServerSideRowModel<TableDataRow>;
+    datasource: AgridDataSource<TableDataRow>;
     provider: AgridProvider<TableDataRow>;
   } {
-    const rowModel = new AgridServerSideRowModel<TableDataRow>({
-      blockSize: 50,
-      maxBlocksInCache: 4,
-      datasource: { getRows: (request) => this.loadRows(request) },
-    });
+    const datasource = new AgridDataSource<TableDataRow>([]);
 
     const provider = new AgridProvider<TableDataRow>({
-      serverSideRowModel: rowModel,
+      datasource,
       control: this.gridControl,
       columns: [],
       readonly: true,
@@ -99,27 +116,37 @@ export class TableDataComponent {
       resizableSidebar: true,
       emptyText: 'This table has no rows. The column headers are still available for filtering and sorting.',
     });
-    return { rowModel, provider };
+    return { datasource, provider };
   }
 
-  /** Loads a requested page, maps filters, and ignores stale responses after navigation. */
-  private async loadRows(request: AgridServerSideRequest) {
+  /** Loads the page and query criteria emitted by aGrid, discarding stale responses. */
+  private async loadRows(request: AgridServerQuery, gridProvider: AgridProvider<TableDataRow>): Promise<void> {
     const [params, query] = this.routeState();
     const connection = this.connections.activeConnection();
     const table = params.get('tableName');
     const schema = query.get('schema') ?? 'public';
-    if (!connection || !table || !connection.capabilities.browseData) return { rows: [], rowCount: 0 };
-    const version = this.requestVersion;
+    if (!connection || !table || !connection.capabilities.browseData) return;
+    const criteria = JSON.stringify({ sort: request.sort, filters: request.filters, quickFilter: request.quickFilter });
+    if (this.lastGridCriteria && this.lastGridCriteria !== criteria && request.startRow > 0) {
+      this.lastGridCriteria = criteria;
+      this.gridControl.setPage(1);
+      return;
+    }
+    this.lastGridCriteria = criteria;
+    const version = ++this.requestVersion;
     const queryRequest: TableDataQueryRequest = {
-      offset: request.startRow,
-      limit: Math.min(100, Math.max(1, request.endRow - request.startRow)),
+      offset: Math.max(0, request.startRow),
+      limit: Math.min(100, Math.max(1, request.pageSize || PAGE_SIZE)),
       sort: request.sort.map(({ field, direction }) => ({ field, direction })),
       filters: mapFilters(request.filters),
       quickFilter: request.quickFilter,
     };
     try {
       const result = await this.connections.queryTableData(connection.connectionId, schema, table, queryRequest);
-      if (version !== this.requestVersion) return { rows: [], rowCount: 0 };
+      if (version !== this.requestVersion) return;
+      this.totalRows.set(result.totalRows);
+      this.gridState.datasource.setData(result.rows);
+      this.gridControl.setTotalRows(result.totalRows);
       if (!sameColumns(this.currentColumns, result.columns)) {
         this.currentColumns = result.columns;
         const columns: ColDef<TableDataRow>[] = result.columns.map((column) => ({
@@ -129,16 +156,14 @@ export class TableDataComponent {
           editable: false,
           width: column.name.length > 18 ? 190 : 150,
         }));
-        this.gridState.provider.columns.set(columns);
+        gridProvider.columns.set(columns);
       }
       this.error.set(null);
       this.loaded.set(true);
-      return { rows: result.rows, rowCount: result.totalRows };
     } catch (error) {
       if (version === this.requestVersion) {
         this.error.set(error instanceof Error ? error.message : 'Unable to load rows from this table.');
       }
-      throw error;
     }
   }
 }

@@ -32,7 +32,7 @@ Offer users a choice of color palettes beyond the current light and dark modes. 
 
 ## Database role and user management
 
-Explore guided management of database users and roles, beginning with least-privilege connection accounts such as a PostgreSQL read-only role. The feature should show the permissions it will grant, distinguish database-specific behavior through the active adapter, and avoid implying that app-level user management replaces database authorization.
+Explore guided management and troubleshooting of database users and roles, beginning with least-privilege connection accounts such as a PostgreSQL read-only role. Guide users through the distinct database, schema, and table privileges required for a connection to discover and access resources. Clearly separate grants on existing tables from default privileges for future tables, and provide a verification step that confirms which schemas and resources the role can see. The feature should show the permissions it will grant, distinguish database-specific behavior through the active adapter, and avoid implying that app-level user management replaces database authorization.
 
 ### Questions to resolve before implementation
 

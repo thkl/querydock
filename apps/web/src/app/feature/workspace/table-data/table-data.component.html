@@ -1,11 +1,6 @@
 <main class="data-workspace">
   @if (!connections.activeConnection()) {
-    <section class="data-state" role="status">
-      <p class="eyebrow">TABLE DATA</p>
-      <h1>Connect to browse table data</h1>
-      <p>Choose a database connection, then open a table’s structure and select Browse data.</p>
-      <button class="subtle-button" type="button" (click)="connections.openConnectDialog()">Add connection</button>
-    </section>
+    <qd-workspace-home />
   } @else if (!connections.activeConnection()?.capabilities?.browseData) {
     <section class="data-state" role="status">
       <p class="eyebrow">TABLE DATA</p>
@@ -17,10 +12,13 @@
       <div>
         <p class="eyebrow">TABLE DATA <span class="separator">/</span> {{ routeState()[1].get('schema') ?? 'public' }}</p>
         <h1>{{ routeState()[0].get('tableName') }}</h1>
-        <p class="page-description">Read-only rows from {{ connections.activeConnection()?.target.database }} · filter and sort in the grid.</p>
+        <p class="page-description">Read-only rows from {{ connections.activeConnection()?.target.database }} · filter and sort with the grid controls.</p>
       </div>
       <button class="subtle-button" type="button" (click)="refresh()">Refresh rows</button>
     </header>
+    <div class="data-toolbar">
+      <p class="row-count" aria-live="polite">{{ totalRows() }} {{ totalRows() === 1 ? 'row' : 'rows' }}</p>
+    </div>
     @if (error()) {
       <p class="data-error" role="alert">{{ error() }}</p>
     } @else if (!loaded()) {
