@@ -13,3 +13,5 @@ graphify-out/
 .vscode
 .DS_Store
 docs/security-review.md
+docs/milestone-e-completion-checklist.md
+docs/milestone-e-manual-test-guide.md

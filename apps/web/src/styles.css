@@ -102,3 +102,28 @@ button, a { -webkit-tap-highlight-color: transparent; }
 @media (prefers-reduced-motion: no-preference) {
   a, button { transition: color 160ms ease, background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease; }
 }
+
+
+/* Scrollbar styling */
+.scrollbar {
+  scrollbar-color: color-mix(in srgb, var(--color-muted-light) 72%, transparent) transparent;
+  scrollbar-width: thin;
+}
+
+.scrollbar::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+.scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollbar::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--color-muted-light) 72%, transparent);
+  border-radius: 999px;
+}
+
+.scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--color-accent);
+}

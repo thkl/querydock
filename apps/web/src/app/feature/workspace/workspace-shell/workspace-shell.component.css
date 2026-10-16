@@ -13,6 +13,7 @@
   flex: 1;
   overflow: hidden;
   grid-template-columns: minmax(180px, var(--sidebar-width)) 24px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
 }
 
 .workspace-splitter {
@@ -68,6 +69,7 @@
 
 @media (max-width: 680px) {
   .workspace {
+    position: relative;
     grid-template-columns: 54px 0 minmax(0, 1fr);
   }
 

@@ -17,6 +17,17 @@ export class WorkspaceSidebarComponent {
   readonly vault = inject(ConnectionVaultService);
   readonly pages = inject(WorkspacePagesService);
   readonly disconnectConfirmationId = signal<string | null>(null);
+  readonly mobileTreeOpen = signal(false);
+
+  /** Closes the narrow-screen navigation drawer after a destination is chosen. */
+  closeMobileTree(): void {
+    this.mobileTreeOpen.set(false);
+  }
+
+  /** Toggles the database navigation drawer on narrow screens. */
+  toggleMobileTree(): void {
+    this.mobileTreeOpen.update((open) => !open);
+  }
 
   /** Formats a connection tree label using its saved name or database target. */
   connectionLabel(connectionId: string): string {
@@ -48,6 +59,7 @@ export class WorkspaceSidebarComponent {
   openResourceSchema(schema: string, table: string): void {
     const connectionId = this.connections.activeConnectionId();
     if (connectionId) this.pages.openTableSchema(connectionId, schema, table);
+    this.closeMobileTree();
   }
 
   /** Opens the selected resource in the read-only data browser. */
@@ -56,6 +68,6 @@ export class WorkspaceSidebarComponent {
     if (connection && table && connection.capabilities.browseData) {
       this.pages.openTableData(connection.connectionId, schema, table);
     }
-
+    this.closeMobileTree();
   }
 }

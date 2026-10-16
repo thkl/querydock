@@ -1,27 +1,31 @@
-<aside class="sidebar">
+@if (mobileTreeOpen()) {
+  <button class="mobile-tree-backdrop" type="button" aria-label="Close database navigation" (click)="closeMobileTree()"></button>
+}
+<aside class="sidebar" [class.is-mobile-tree-open]="mobileTreeOpen()">
   <div class="sidebar-actions">
-    <a class="sidebar-action" routerLink="/" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }">
+    <a class="sidebar-action" routerLink="/" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }" (click)="closeMobileTree()">
       <span class="nav-icon">▦</span><span>Workspace</span>
     </a>
-    <a class="sidebar-action" routerLink="/runbook" routerLinkActive="active">
+    <a class="sidebar-action" routerLink="/runbook" routerLinkActive="active" (click)="closeMobileTree()">
       <span class="nav-icon">▤</span><span>Runbook</span>
     </a>
   </div>
   <div class="sidebar-section-heading">
     <span>CONNECTIONS</span>
+    <button class="tiny-icon-button mobile-tree-toggle" type="button" [attr.aria-expanded]="mobileTreeOpen()" aria-label="Toggle database navigation" title="Browse connections, schemas, and tables" (click)="toggleMobileTree()">☷</button>
     <button class="tiny-icon-button" type="button" aria-label="Add connection" title="Connect to PostgreSQL" (click)="connections.openConnectDialog()">+</button>
   </div>
   @if (connections.disconnectError()) {
     <p class="connection-error" role="alert">Could not disconnect: {{ connections.disconnectError() }}</p>
   }
-  <div class="resource-tree">
+  <div class="resource-tree scrollbar">
     @for (connection of connections.connections(); track connection.connectionId) {
       <div class="connection-entry" [class.selected]="connections.activeConnectionId() === connection.connectionId">
         <button
           class="connection-item"
           [class.selected]="connections.activeConnectionId() === connection.connectionId"
           type="button"
-          (click)="connections.selectConnection(connection.connectionId)"
+          (click)="connections.selectConnection(connection.connectionId); closeMobileTree()"
           [title]="connectionLabel(connection.connectionId)"
         >
           <span class="database-icon">◉</span>
@@ -54,7 +58,7 @@
             @for (group of connections.resourceGroups(); track group.schema) {
               <div class="tree-row schema-row" [title]="group.schema">
                 <span class="tree-caret">⌄</span><span class="schema-icon">▱</span><span>{{ group.schema }}</span>
-                <button class="schema-add-table" type="button" [attr.aria-label]="'Create table in ' + group.schema" [title]="'Create table in ' + group.schema" (click)="pages.openCreateTable(group.schema)">＋</button>
+                <button class="schema-add-table" type="button" [attr.aria-label]="'Create table in ' + group.schema" [title]="'Create table in ' + group.schema" (click)="pages.openCreateTable(group.schema); closeMobileTree()">＋</button>
               </div>
               @for (resource of group.resources; track resource.schema + '.' + resource.name) {
                 <div class="tree-row table-row table-row-grid">
@@ -75,7 +79,7 @@
               }
             }
             <a class="tree-row relationship-tree-row" routerLink="/relationships" routerLinkActive="selected" ariaCurrentWhenActive="page"
-              (click)="pages.prepareRelationshipDiagram(connection.connectionId)">
+              (click)="pages.prepareRelationshipDiagram(connection.connectionId); closeMobileTree()">
               <span class="table-icon" aria-hidden="true">⌘</span><span>Relationships</span>
             </a>
             @if (!connections.activeResources().length && !connections.resourceErrorsByConnection().get(connection.connectionId)) {
