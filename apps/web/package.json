@@ -8,7 +8,8 @@
     "build": "pnpm --filter @querydock/contracts build && ng build",
     "typecheck": "pnpm --filter @querydock/contracts build && tsc -p tsconfig.app.json --noEmit",
     "test": "pnpm -w exec vitest run --config apps/web/vitest.config.mts",
-    "test:watch": "pnpm -w exec vitest --config apps/web/vitest.config.mts"
+    "test:watch": "pnpm -w exec vitest --config apps/web/vitest.config.mts",
+    "test:e2e": "playwright test --config playwright.config.ts"
   },
   "dependencies": {
     "@angular/cdk": "^22.2.2",
@@ -33,6 +34,7 @@
     "@angular/build": "^22.0.0",
     "@angular/cli": "^22.0.0",
     "@angular/compiler-cli": "^22.0.0",
+    "@playwright/test": "^1.64.1",
     "fake-indexeddb": "^6.2.5",
     "typescript": "^6.0.0"
   }

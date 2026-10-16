@@ -16,7 +16,8 @@
     "test": "pnpm test:typecheck && vitest run",
     "test:typecheck": "pnpm --filter @querydock/server exec tsc -p ../../tests/tsconfig.json",
     "test:watch": "vitest",
-    "test:integration": "pnpm --filter @querydock/server test:integration"
+    "test:integration": "pnpm --filter @querydock/server test:integration",
+    "test:e2e": "pnpm --filter @querydock/web test:e2e"
   },
   "devDependencies": {
     "husky": "^9.1.7",
