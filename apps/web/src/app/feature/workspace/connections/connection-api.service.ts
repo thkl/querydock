@@ -14,6 +14,8 @@ import type {
   TableSnapshot,
   TableDataQueryRequest,
   TableDataQueryResponse,
+  TableDataRowUpdate,
+  TableDataRowInsert,
 } from '@querydock/contracts';
 import { tableDataQueryResponseSchema } from '@querydock/contracts';
 
@@ -158,6 +160,34 @@ export class ConnectionApiService {
       const parsed = tableDataQueryResponseSchema.safeParse(payload);
       if (!parsed.success) throw new Error('The server returned an invalid table data response.');
       return parsed.data;
+    });
+  }
+
+  /** Saves one completed table row directly through the active database adapter. */
+  updateTableDataRow(
+    connectionId: string,
+    schema: string,
+    table: string,
+    update: TableDataRowUpdate,
+  ): Promise<void> {
+    const path = [connectionId, 'tables', schema, table, 'data', 'update-row'].map(encodeURIComponent).join('/');
+    return request<void>(`/api/connections/${path}`, {
+      method: 'POST',
+      body: JSON.stringify(update),
+    });
+  }
+
+  /** Inserts one completed row through the server's active database adapter. */
+  insertTableDataRow(
+    connectionId: string,
+    schema: string,
+    table: string,
+    insert: TableDataRowInsert,
+  ): Promise<void> {
+    const path = [connectionId, 'tables', schema, table, 'data', 'insert-row'].map(encodeURIComponent).join('/');
+    return request<void>(`/api/connections/${path}`, {
+      method: 'POST',
+      body: JSON.stringify(insert),
     });
   }
 

@@ -20,6 +20,8 @@ import type {
   TableSnapshot,
   TableDataQueryRequest,
   TableDataQueryResponse,
+  TableDataRowUpdate,
+  TableDataRowInsert,
 } from '@querydock/contracts';
 
 interface ResourceRow {
@@ -231,20 +233,130 @@ export class PostgresAdapter {
         const select = snapshot.fields
           .map(({ name }) => `${quoteIdentifier(name)}::text AS ${quoteIdentifier(name)}`)
           .join(', ');
+        const rowVersionAlias = uniqueAlias(snapshot.fields.map(({ name }) => name), '__querydock_row_version');
+        const keyFields = snapshot.constraints.find(({ kind }) => kind === 'primaryKey')?.fieldNames ?? [];
+        const isBaseTable = snapshot.kind === 'table' || snapshot.kind === 'partitionedTable';
+        const privileges = isBaseTable
+          ? await client.query<{ name: string; canUpdate: boolean; canInsert: boolean; tableInsert: boolean }>(`
+              SELECT attribute.attname AS name,
+                has_column_privilege(current_user, relation.oid, attribute.attnum, 'UPDATE') AS "canUpdate",
+                has_column_privilege(current_user, relation.oid, attribute.attnum, 'INSERT') AS "canInsert",
+                has_table_privilege(current_user, relation.oid, 'INSERT') AS "tableInsert"
+              FROM pg_catalog.pg_class relation
+              JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace
+              JOIN pg_catalog.pg_attribute attribute ON attribute.attrelid = relation.oid
+              WHERE namespace.nspname = $1 AND relation.relname = $2
+                AND attribute.attnum > 0 AND NOT attribute.attisdropped
+            `, [schema, table])
+          : { rows: [] as { name: string; canUpdate: boolean; canInsert: boolean; tableInsert: boolean }[] };
+        const updatableFields = new Set(privileges.rows.filter(({ canUpdate }) => canUpdate).map(({ name }) => name));
+        const insertableFields = new Set(privileges.rows.filter(({ canInsert }) => canInsert).map(({ name }) => name));
+        const canUpdateRows = isBaseTable && keyFields.length > 0
+          && snapshot.fields.some(({ name, generated, identityGeneration }) => updatableFields.has(name)
+            && !generated && !identityGeneration && !keyFields.includes(name));
+        const canInsertRows = isBaseTable && (privileges.rows[0]?.tableInsert === true || insertableFields.size > 0);
+        const versionSelect = canUpdateRows ? `, xmin::text AS ${quoteIdentifier(rowVersionAlias)}` : '';
         const result = await client.query<Record<string, string | null>>(
-          `SELECT ${select} FROM ${quoteIdentifier(schema)}.${quoteIdentifier(table)}${where} ORDER BY ${order} LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
+          `SELECT ${select}${versionSelect} FROM ${quoteIdentifier(schema)}.${quoteIdentifier(table)}${where} ORDER BY ${order} LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
           pageValues,
         );
         await client.query('COMMIT');
+        const rowVersions = canUpdateRows ? result.rows.map((row) => String(row[rowVersionAlias] ?? '')) : [];
+        const rows = canUpdateRows
+          ? result.rows.map(({ [rowVersionAlias]: _version, ...row }) => row)
+          : result.rows;
         return {
-          columns: snapshot.fields.map(({ ordinalPosition, name, dataType, nullable }) => ({ ordinalPosition, name, dataType, nullable })),
-          rows: result.rows,
+          columns: snapshot.fields.map(({ ordinalPosition, name, dataType, nullable, generated, identityGeneration }) => ({
+            ordinalPosition,
+            name,
+            dataType,
+            nullable,
+            editable: canUpdateRows && updatableFields.has(name) && !generated && !identityGeneration && !keyFields.includes(name),
+            insertable: canInsertRows && (privileges.rows.find((field) => field.name === name)?.canInsert ?? false)
+              && !generated && !identityGeneration,
+          })),
+          rows,
+          keyFields,
+          rowVersions,
+          canUpdateRows,
+          canInsertRows,
           totalRows,
         };
       } catch (error) {
         await client.query('ROLLBACK').catch(() => undefined);
         throw error;
       }
+    });
+  }
+
+  /** Updates one existing row with its primary key and opaque row version as a concurrency guard. */
+  async updateTableDataRow(
+    configuration: PostgresConnectRequest,
+    schema: string,
+    table: string,
+    update: TableDataRowUpdate,
+  ): Promise<void> {
+    validatePostgresIdentifier(schema, 'schema');
+    validatePostgresIdentifier(table, 'table');
+    return this.withClient(configuration, async (client) => {
+      await client.query('BEGIN');
+      try {
+        const snapshot = await this.inspectTableWithClient(client, schema, table);
+        if (!snapshot) throw new MigrationPlanError('not-found', 'The requested table was not found or is not visible.');
+        const statement = updateDataRowStatement(snapshot, update);
+        const result = await client.query(statement);
+        if (result.rowCount !== 1) {
+          throw new MigrationPlanError('drift', 'This row changed or was removed in the database. Refresh it before saving your edit.');
+        }
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK').catch(() => undefined);
+        throw error;
+      }
+    });
+  }
+
+  /** Inserts one row using only columns the active database role may insert. */
+  async insertTableDataRow(
+    configuration: PostgresConnectRequest,
+    schema: string,
+    table: string,
+    insert: TableDataRowInsert,
+  ): Promise<void> {
+    validatePostgresIdentifier(schema, 'schema');
+    validatePostgresIdentifier(table, 'table');
+    return this.withClient(configuration, async (client) => {
+      const snapshot = await this.inspectTableWithClient(client, schema, table);
+      if (!snapshot) throw new MigrationPlanError('not-found', 'The requested table was not found or is not visible.');
+      if (snapshot.kind !== 'table' && snapshot.kind !== 'partitionedTable') {
+        throw new MigrationPlanError('invalid', 'Rows can only be added to a base table.');
+      }
+      const privileges = await client.query<{ name: string; canInsert: boolean }>(`
+        SELECT attribute.attname AS name,
+          has_column_privilege(current_user, relation.oid, attribute.attnum, 'INSERT') AS "canInsert"
+        FROM pg_catalog.pg_class relation
+        JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace
+        JOIN pg_catalog.pg_attribute attribute ON attribute.attrelid = relation.oid
+        WHERE namespace.nspname = $1 AND relation.relname = $2
+          AND attribute.attnum > 0 AND NOT attribute.attisdropped
+      `, [schema, table]);
+      const fieldByName = new Map(snapshot.fields.map((field) => [field.name, field]));
+      const entries = Object.entries(insert.values);
+      for (const [name] of entries) {
+        const field = fieldByName.get(name);
+        if (!field || field.generated || field.identityGeneration
+          || !privileges.rows.some((privilege) => privilege.name === name && privilege.canInsert)) {
+          throw new MigrationPlanError('invalid', `The field "${name}" cannot be inserted by this database role.`);
+        }
+      }
+      const values: unknown[] = [];
+      const columns = entries.map(([name]) => quoteIdentifier(name));
+      const parameters = entries.map(([, value]) => `$${values.push(value)}`);
+      const statement = entries.length
+        ? `INSERT INTO ${quoteIdentifier(schema)}.${quoteIdentifier(table)} (${columns.join(', ')}) VALUES (${parameters.join(', ')})`
+        : `INSERT INTO ${quoteIdentifier(schema)}.${quoteIdentifier(table)} DEFAULT VALUES`;
+      const result = await client.query(statement, values);
+      if (result.rowCount !== 1) throw new MigrationPlanError('unknown', 'The database did not confirm that one row was inserted.');
     });
   }
 
@@ -375,6 +487,7 @@ export class PostgresAdapter {
       if (snapshot.fingerprint !== request.baselineFingerprint) {
         throw new MigrationPlanError('drift', 'The table changed since it was loaded. Refresh the schema before drafting a migration.');
       }
+      validateDataRowOperationBatch(request.operations);
       await validateForeignKeyTargets(client, snapshot, request.operations);
       await validateTableLifecycleTarget(client, snapshot, request.operations);
       const preview = createMigrationPreview(snapshot, request);
@@ -445,7 +558,9 @@ export class PostgresAdapter {
           return { appliedStatements: statements, snapshots: createdSnapshots };
         }
         validateTableLifecycleOperations(request.operations);
-        await client.query(`LOCK TABLE ${quoteIdentifier(request.schema)}.${quoteIdentifier(request.table)} IN ACCESS EXCLUSIVE MODE`);
+        const dataOnly = request.operations.every((operation) =>
+          operation.kind === 'updateDataRow' || operation.kind === 'insertDataRow');
+        await client.query(`LOCK TABLE ${quoteIdentifier(request.schema)}.${quoteIdentifier(request.table)} IN ${dataOnly ? 'ROW EXCLUSIVE' : 'ACCESS EXCLUSIVE'} MODE`);
         const snapshot = await this.inspectTableWithClient(client, request.schema, request.table);
         if (!snapshot) throw new MigrationPlanError('not-found', 'The requested table was not found or is not visible.');
         if (snapshot.fingerprint !== request.baselineFingerprint) {
@@ -463,7 +578,12 @@ export class PostgresAdapter {
           throw new MigrationPlanError('review-mismatch', 'Review and acknowledge the current migration warnings before applying.');
         }
 
-        for (const statement of statements) await client.query(statement);
+        for (const statement of statements) {
+          const result = await client.query(statement);
+          if ((statement.startsWith('UPDATE ') || statement.startsWith('INSERT ')) && result.rowCount !== 1) {
+            throw new MigrationPlanError('drift', 'A staged row operation affected an unexpected number of rows. The transaction was rolled back; refresh the table and stage the operation again.');
+          }
+        }
         const lifecycle = request.operations[0];
         const resultSchema = lifecycle?.kind === 'renameTable' ? lifecycle.newName : request.table;
         const updatedSnapshot = lifecycle?.kind === 'dropTable'
@@ -1077,6 +1197,7 @@ function normalizeFieldDraft(
 
 /** @internal Pure SQL generation helper; exported for the migration-plan unit tests. */
 export function createMigrationPreview(snapshot: TableSnapshot, request: MigrationPreviewRequest): string[] {
+  validateDataRowOperationBatch(request.operations);
   if (snapshot.kind !== 'table' && snapshot.kind !== 'partitionedTable') {
     throw new MigrationPlanError('invalid', 'Only PostgreSQL tables can be renamed, dropped, or altered.');
   }
@@ -1109,6 +1230,7 @@ export function createMigrationPreview(snapshot: TableSnapshot, request: Migrati
     if (operation.kind === 'createTable') {
       throw new MigrationPlanError('invalid', 'Create-table operations require a new-table baseline.');
     }
+    if (operation.kind === 'updateDataRow' || operation.kind === 'insertDataRow') continue;
     if (operation.kind === 'addNullableField') {
       validateFieldName(operation.name);
       if (operation.identityGeneration && !identityGenerationSupported(operation.type)) {
@@ -1197,7 +1319,7 @@ export function createMigrationPreview(snapshot: TableSnapshot, request: Migrati
     ...fieldOperations,
     ...request.operations.filter((operation) => operation.kind === 'addConstraint'),
   ];
-  return orderedOperations.flatMap((operation) => {
+  const schemaStatements = orderedOperations.flatMap((operation) => {
     if (operation.kind === 'addNullableField') {
       const typeSql = formatFieldType(operation);
       const identitySql = operation.identityGeneration
@@ -1223,6 +1345,43 @@ export function createMigrationPreview(snapshot: TableSnapshot, request: Migrati
     const kindSql = operation.constraintKind === 'primaryKey' ? 'PRIMARY KEY' : 'UNIQUE';
     return [`ALTER TABLE ${table} ADD CONSTRAINT ${quoteIdentifier(operation.name)} ${kindSql} (${fields});`];
   });
+  const dataStatements = request.operations
+    .filter((operation): operation is Extract<SchemaOperation, { kind: 'updateDataRow' }> => operation.kind === 'updateDataRow')
+    .map((operation) => updateDataRowStatement(snapshot, operation));
+  const rowInserts = request.operations
+    .filter((operation): operation is Extract<SchemaOperation, { kind: 'insertDataRow' }> => operation.kind === 'insertDataRow')
+    .map((operation) => insertDataRowStatement(snapshot, operation));
+  return [...schemaStatements, ...dataStatements, ...rowInserts];
+}
+
+/** Keeps row writes isolated from schema changes while allowing several completed rows per batch. */
+function validateDataRowOperationBatch(operations: SchemaOperation[]): void {
+  const dataOperations = operations.filter((operation) => operation.kind === 'updateDataRow' || operation.kind === 'insertDataRow');
+  if (dataOperations.length && dataOperations.length !== operations.length) {
+    throw new MigrationPlanError('invalid', 'Stage data row edits separately from schema changes.');
+  }
+}
+
+/** Generates a reviewed INSERT statement from values accepted by the data-row contract. */
+function insertDataRowStatement(
+  snapshot: TableSnapshot,
+  insert: TableDataRowInsert,
+): string {
+  if (snapshot.kind !== 'table' && snapshot.kind !== 'partitionedTable') {
+    throw new MigrationPlanError('invalid', 'Rows can only be added to a base table.');
+  }
+  const fields = new Map(snapshot.fields.map((field) => [field.name, field]));
+  const entries = Object.entries(insert.values);
+  for (const [name] of entries) {
+    const field = fields.get(name);
+    if (!field || field.generated || field.identityGeneration) {
+      throw new MigrationPlanError('invalid', `The field "${name}" cannot be set when adding a row.`);
+    }
+  }
+  if (!entries.length) return `INSERT INTO ${quoteIdentifier(snapshot.schema)}.${quoteIdentifier(snapshot.name)} DEFAULT VALUES;`;
+  const columns = entries.map(([name]) => quoteIdentifier(name)).join(', ');
+  const values = entries.map(([, value]) => sqlLiteral(value)).join(', ');
+  return `INSERT INTO ${quoteIdentifier(snapshot.schema)}.${quoteIdentifier(snapshot.name)} (${columns}) VALUES (${values});`;
 }
 
 /** Builds ordered ALTER TABLE statements for a supported field change. */
@@ -1462,6 +1621,54 @@ function validateDefaultExpression(expression: string): string {
 /** Quotes a PostgreSQL identifier, including embedded quote characters. */
 function quoteIdentifier(identifier: string): string {
   return `"${identifier.replaceAll('"', '""')}"`;
+}
+
+/** Adds one row-update statement to generated migration previews after schema operations. */
+function updateDataRowStatement(snapshot: TableSnapshot, update: TableDataRowUpdate): string {
+  if (snapshot.kind !== 'table' && snapshot.kind !== 'partitionedTable') {
+    throw new MigrationPlanError('invalid', 'Only base tables with a primary key support row updates.');
+  }
+  const primaryKey = snapshot.constraints.find(({ kind }) => kind === 'primaryKey')?.fieldNames ?? [];
+  if (!primaryKey.length || primaryKey.length !== Object.keys(update.key).length
+    || primaryKey.some((name) => !Object.hasOwn(update.key, name))) {
+    throw new MigrationPlanError('invalid', 'This row update must include every primary-key field for the selected table.');
+  }
+  if (!/^\d+$/.test(update.expectedVersion)) {
+    throw new MigrationPlanError('invalid', 'The row version is invalid. Refresh the table and retry the edit.');
+  }
+  const fieldByName = new Map(snapshot.fields.map((field) => [field.name, field]));
+  for (const [name, value] of Object.entries(update.key)) {
+    if (!fieldByName.has(name) || value === null) {
+      throw new MigrationPlanError('invalid', 'The row identity does not match this table primary key. Refresh the table and retry.');
+    }
+  }
+  const changeNames = Object.keys(update.changes);
+  if (!changeNames.length) throw new MigrationPlanError('invalid', 'Change at least one editable field before saving.');
+  for (const name of changeNames) {
+    const field = fieldByName.get(name);
+    if (!field || field.generated || field.identityGeneration || primaryKey.includes(name)) {
+      throw new MigrationPlanError('invalid', `The field "${name}" cannot be changed in the data grid.`);
+    }
+  }
+  const assignments = changeNames.map((name) => `${quoteIdentifier(name)} = ${sqlLiteral(update.changes[name])}`);
+  const keyPredicates = primaryKey.map((name) => `${quoteIdentifier(name)} IS NOT DISTINCT FROM ${sqlLiteral(update.key[name])}`);
+  const predicates = [...keyPredicates, `xmin::text = ${sqlLiteral(update.expectedVersion)}`];
+  return `UPDATE ${quoteIdentifier(snapshot.schema)}.${quoteIdentifier(snapshot.name)} SET ${assignments.join(', ')} WHERE ${predicates.join(' AND ')};`;
+}
+
+/** Emits a quoted SQL literal for preview/runbook text without accepting SQL expressions. */
+function sqlLiteral(value: string | null | undefined): string {
+  if (value === null || value === undefined) return 'NULL';
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+/** Finds a result alias that cannot shadow a real user column. */
+function uniqueAlias(existing: string[], base: string): string {
+  const names = new Set(existing);
+  let alias = base;
+  let suffix = 1;
+  while (names.has(alias)) alias = `${base}_${suffix++}`;
+  return alias;
 }
 
 type TableDataFilter = TableDataQueryRequest['filters'][number];

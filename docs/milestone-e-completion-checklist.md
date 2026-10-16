@@ -8,6 +8,8 @@ For reproducible, numbered browser/database procedures for the manual items, use
 
 - [OK] **[MANUAL]** Confirm Milestone E scope: relationship diagram and adapter-validated foreign-key editing; cross-table dependency ordering; bounded data browsing and batch edits; named connections and disconnect; primary-key picker and CHECK help.
 
+- [ ] **[MANUAL]** Verify the second-engine goal with a disposable SQL Server instance: the same client connects, discovers and inspects resources, browses data, and presents the supported schema/data workflows through adapter capabilities. Record intentional capability differences and any engine-specific limitations.
+
 - [OK] **[MANUAL]** Use a disposable PostgreSQL database with empty, populated, related, composite-key, keyless, and conflicting tables. Include large integers, decimals, timestamps, JSON, NULL, and default values.
 
 - [OK] **[MANUAL]** Verify the connected database and role before each walkthrough. Never use production data or credentials. Run read/write and read-only cases with separate database roles.
@@ -41,12 +43,23 @@ For reproducible, numbered browser/database procedures for the manual items, use
 - [OK] **[MANUAL]** Use CHECK Expression help to build an expression; confirm it populates the grid, stages into Runbook, and remains visible as an uncommitted change when navigating away and back. Invalid CHECK expressions return actionable server feedback.
 - [ ] **[AUTO]** Test relationship contracts, compatibility validation, quoted SQL generation, operation ordering, dependency blockers/cycles, and diagram/editor draft state.
 
+## SQL Server adapter and client independence
+
+- [ ] **[MANUAL]** Connect to SQL Server and verify the existing connection dialog, named profiles, connection tree, workspace tabs, and disconnect flow work without a PostgreSQL-specific client path.
+- [ ] **[MANUAL]** Exercise resource discovery, schema inspection, relationship display/editing, data browsing, and supported Runbook operations. Confirm SQL Server syntax and capabilities come from its adapter, while unsupported operations are clearly disabled or explained.
+- [ ] **[AUTO]** Test adapter selection and shared contracts with PostgreSQL and SQL Server responses. The same client components must handle both and render capability differences without engine-specific branching.
+- [ ] **[AUTO]** Add disposable SQL Server adapter integration coverage for supported introspection, paging/filtering, SQL generation, transaction behavior, and data batches when implemented.
+
 ## Data browsing and editing
 
 - [OK] **[MANUAL]** Review the data browser grid presentation and controls; the user customized the grid and confirmed the browser UI is satisfactory.
 - [OK] **[MANUAL]** Confirm table structure and data actions appear on row hover, remain keyboard reachable, and stay visible on touch devices. The user confirmed this behavior.
 - [OK] **[MANUAL]** Open a table’s Browse data page from its structure view. Confirm it gets a connection-scoped workspace tab, returns to the same table after switching tabs, and re-registers when its route is loaded directly after session restore.
 - [OK] **[MANUAL]** Browse a small and large table. Confirm aGrid’s native page bar uses server-side paging, filtering/sorting is server-side and stable, refresh reflects external changes, and query controls do not send unbounded requests.
+- [ ] **[MANUAL]** On a table with a primary key, edit two cells in one row, then leave the row. Confirm there is no save request per cell, one completed-row save occurs by default, and refreshing shows both values in PostgreSQL.
+- [ ] **[MANUAL]** Enable **Save changes to Runbook**, edit multiple cells in a row, and leave it. Confirm the row edit appears as adapter-generated SQL in Runbook, is not executed before Apply, and Discard leaves the database unchanged.
+- [ ] **[MANUAL]** Edit a keyless table and generated/identity columns. Confirm the table is read-only or those fields cannot be edited; verify primary-key values cannot be changed in the grid.
+- [ ] **[MANUAL]** Change a loaded row in another database editor before saving. Confirm QueryDock reports a concurrency conflict, preserves the local edit for resolution, and does not overwrite the newer value.
 
 
 - [OK] **[MANUAL]** Verify identifiers and filter values are safely handled. Try quotes, wildcard characters, reserved words, and unusual column names; values must be parameterized and identifiers safely quoted.

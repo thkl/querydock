@@ -23,6 +23,8 @@ import {
   schemaFieldDraftRequestSchema,
   postgresConnectRequestSchema,
   tableDataQueryRequestSchema,
+  tableDataRowUpdateSchema,
+  tableDataRowInsertSchema,
   type ConnectResponse,
 } from '@querydock/contracts';
 import { ConnectionSessionsService } from './connection-sessions.service.js';
@@ -32,7 +34,7 @@ const postgresCapabilities = {
   discoverResources: true,
   inspectTables: true,
   browseData: true,
-  mutateData: false,
+  mutateData: true,
   editSchema: true,
   executeSql: false,
 } as const;
@@ -150,6 +152,50 @@ export class ConnectionsController {
     const configuration = this.sessions.requireConnection(request, response, connectionId);
     try {
       return await this.postgres.queryTableData(configuration, schema, table, parsed.data);
+    } catch (error) {
+      if (error instanceof MigrationPlanError) throw this.asMigrationException(error);
+      throw this.asSafeDatabaseException(error);
+    }
+  }
+
+  /** Saves one completed data-grid row edit without staging it in the schema runbook. */
+  @Post(':connectionId/tables/:schema/:table/data/update-row')
+  @HttpCode(204)
+  async updateTableDataRow(
+    @Param('connectionId') connectionId: string,
+    @Param('schema') schema: string,
+    @Param('table') table: string,
+    @Body() body: unknown,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ): Promise<void> {
+    const parsed = tableDataRowUpdateSchema.safeParse(body);
+    if (!parsed.success) throw new BadRequestException('Invalid table row update. Refresh the row and submit a completed row edit.');
+    const configuration = this.sessions.requireConnection(request, response, connectionId);
+    try {
+      await this.postgres.updateTableDataRow(configuration, schema, table, parsed.data);
+    } catch (error) {
+      if (error instanceof MigrationPlanError) throw this.asMigrationException(error);
+      throw this.asSafeDatabaseException(error);
+    }
+  }
+
+  /** Inserts one completed grid row through the active database role. */
+  @Post(':connectionId/tables/:schema/:table/data/insert-row')
+  @HttpCode(204)
+  async insertTableDataRow(
+    @Param('connectionId') connectionId: string,
+    @Param('schema') schema: string,
+    @Param('table') table: string,
+    @Body() body: unknown,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ): Promise<void> {
+    const parsed = tableDataRowInsertSchema.safeParse(body);
+    if (!parsed.success) throw new BadRequestException('Invalid new table row. Enter valid values and submit the completed row.');
+    const configuration = this.sessions.requireConnection(request, response, connectionId);
+    try {
+      await this.postgres.insertTableDataRow(configuration, schema, table, parsed.data);
     } catch (error) {
       if (error instanceof MigrationPlanError) throw this.asMigrationException(error);
       throw this.asSafeDatabaseException(error);

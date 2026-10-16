@@ -158,11 +158,32 @@ export const tableDataQueryResponseSchema = z.object({
     name: z.string(),
     dataType: z.string(),
     nullable: z.boolean(),
+    editable: z.boolean(),
+    insertable: z.boolean(),
   })),
   rows: z.array(z.record(z.string(), z.string().nullable())),
+  /** Primary key fields used as stable row identities for updates. */
+  keyFields: z.array(z.string()),
+  /** Opaque adapter concurrency tokens aligned by index with `rows` when row edits are supported. */
+  rowVersions: z.array(z.string()),
+  canUpdateRows: z.boolean(),
+  canInsertRows: z.boolean(),
   totalRows: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
 });
 export type TableDataQueryResponse = z.infer<typeof tableDataQueryResponseSchema>;
+
+export const tableDataRowUpdateSchema = z.object({
+  key: z.record(z.string(), z.string().nullable()).refine((value) => Object.keys(value).length > 0),
+  expectedVersion: z.string().min(1).max(256),
+  changes: z.record(z.string(), z.string().nullable()).refine((value) => Object.keys(value).length > 0),
+});
+export type TableDataRowUpdate = z.infer<typeof tableDataRowUpdateSchema>;
+
+export const tableDataRowInsertSchema = z.object({
+  draftId: z.uuid(),
+  values: z.record(z.string(), z.string().nullable()),
+});
+export type TableDataRowInsert = z.infer<typeof tableDataRowInsertSchema>;
 
 // Type identifiers and parameter rules belong to the active database adapter.
 export const nullableFieldTypeSchema = z.string().trim().min(1).max(128);
@@ -262,10 +283,20 @@ export const dropTableOperationSchema = z.object({
   kind: z.literal('dropTable'),
 });
 
+export const updateDataRowOperationSchema = tableDataRowUpdateSchema.extend({
+  kind: z.literal('updateDataRow'),
+});
+
+export const insertDataRowOperationSchema = tableDataRowInsertSchema.extend({
+  kind: z.literal('insertDataRow'),
+});
+
 export const schemaOperationSchema = z.discriminatedUnion('kind', [
   createTableOperationSchema,
   renameTableOperationSchema,
   dropTableOperationSchema,
+  updateDataRowOperationSchema,
+  insertDataRowOperationSchema,
   addNullableFieldOperationSchema,
   alterFieldOperationSchema,
   addConstraintOperationSchema,

@@ -27,7 +27,28 @@
   display: flex;
   min-width: 0;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.runbook-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--color-foreground);
+  font-size: .9em;
+  cursor: pointer;
+}
+
+.runbook-toggle input {
+  width: 1em;
+  height: 1em;
+  accent-color: var(--color-accent);
+}
+
+.read-only-notice {
+  color: var(--color-muted);
+  font-size: .9em;
 }
 
 .row-count {

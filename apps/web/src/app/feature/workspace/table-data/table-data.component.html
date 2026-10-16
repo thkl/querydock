@@ -12,11 +12,28 @@
       <div>
         <p class="eyebrow">TABLE DATA <span class="separator">/</span> {{ routeState()[1].get('schema') ?? 'public' }}</p>
         <h1>{{ routeState()[0].get('tableName') }}</h1>
-        <p class="page-description">Read-only rows from {{ connections.activeConnection()?.target.database }} · filter and sort with the grid controls.</p>
+        <p class="page-description">Browse and edit rows in {{ connections.activeConnection()?.target.database }} · completed row edits save directly.</p>
       </div>
       <button class="subtle-button" type="button" (click)="refresh()">Refresh rows</button>
     </header>
     <div class="data-toolbar">
+      @if (canUpdateRows() || canInsertRows()) {
+        <label class="runbook-toggle">
+          <input
+            type="checkbox"
+            [checked]="saveChangesToRunbook()"
+            (change)="saveChangesToRunbook.set($any($event.target).checked)"
+          />
+          <span>Save changes to Runbook</span>
+        </label>
+      } @else {
+        <span class="read-only-notice">This database account can browse but cannot edit or add rows.</span>
+      }
+      @if (canInsertRows() && !canUpdateRows()) {
+        <span class="read-only-notice">This role can add rows, but existing rows are read-only.</span>
+      } @else if (canUpdateRows() && !canInsertRows()) {
+        <span class="read-only-notice">This role can edit existing rows, but cannot add rows.</span>
+      }
       <p class="row-count" aria-live="polite">{{ totalRows() }} {{ totalRows() === 1 ? 'row' : 'rows' }}</p>
     </div>
     @if (error()) {
@@ -24,9 +41,9 @@
     } @else if (!loaded()) {
       <p class="data-status" role="status">Loading table rows…</p>
     }
-    <section class="data-grid" aria-label="Read-only table rows">
-      <agrid [provider]="provider()" />
+    <section class="data-grid" aria-label="Table rows">
+      <agrid [provider]="provider()" (prepareAddRecord)="prepareAddRow($event)" (rowChanged)="saveRow($event)" />
     </section>
-    <p class="data-footnote">Values are displayed as text to preserve database precision. QueryDock does not save fetched rows in browser storage.</p>
+    <p class="data-footnote">Values are displayed as text to preserve database precision. Edits save after you finish a row. Tables without a primary key remain read-only. Browsed rows are never stored in browser storage.</p>
   }
 </main>

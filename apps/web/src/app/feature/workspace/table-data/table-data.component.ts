@@ -11,10 +11,13 @@ import {
   type AgridServerQuery,
   type ColDef,
   type ColumnFilter,
+  type NewRecord,
+  type RowUpdateEvent,
 } from '@thkl/agrid';
 import { ConnectionApiService } from '../connections/connection-api.service';
 import { WorkspaceHomeComponent } from '../workspace-home/workspace-home.component';
 import { WorkspacePagesService } from '../workspace-pages.service';
+import { RunbookService } from '../runbook/runbook.service';
 
 type TableDataRow = Record<string, string | null>;
 type TableDataFilter = TableDataQueryRequest['filters'][number];
@@ -32,6 +35,7 @@ export class TableDataComponent {
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
   private readonly workspacePages = inject(WorkspacePagesService);
+  private readonly runbook = inject(RunbookService);
   readonly connections = inject(ConnectionApiService);
   readonly routeState = toSignal(
     combineLatest([this.route.paramMap, this.route.queryParamMap]),
@@ -40,10 +44,17 @@ export class TableDataComponent {
   readonly error = signal<string | null>(null);
   readonly loaded = signal(false);
   readonly totalRows = signal(0);
+  readonly saveChangesToRunbook = signal(false);
+  readonly canUpdateRows = signal(false);
+  readonly canInsertRows = signal(false);
   private id = signal<string | null>(null);
   private requestVersion = 0;
   private lastGridCriteria = '';
   private currentColumns: TableDataQueryResponse['columns'] = [];
+  private keyFields: string[] = [];
+  private rowVersions: string[] = [];
+  private originalRows: TableDataRow[] = [];
+  private newRows = new Map<number, { draftId: string; baseline: TableDataRow }>();
   readonly gridControl = new AgridControl({ allowRowReorder: false, pageSize: PAGE_SIZE });
   private gridState = this.createGridState();
   readonly provider = signal(this.gridState.provider);
@@ -62,6 +73,13 @@ export class TableDataComponent {
       this.totalRows.set(0);
       this.lastGridCriteria = '';
       this.currentColumns = [];
+      this.keyFields = [];
+      this.rowVersions = [];
+      this.originalRows = [];
+      this.canUpdateRows.set(false);
+      this.canInsertRows.set(false);
+      this.newRows.clear();
+      this.saveChangesToRunbook.set(false);
       this.gridControl.setPage(1);
       this.gridState = this.createGridState();
       this.provider.set(this.gridState.provider);
@@ -90,7 +108,7 @@ export class TableDataComponent {
     void this.loadRows(query, gridProvider);
   }
 
-  /** Creates a read-only grid with aGrid's native server paging and query controls. */
+  /** Creates a row-editable grid; provider events still save only after a row is completed. */
   private createGridState(): {
     datasource: AgridDataSource<TableDataRow>;
     provider: AgridProvider<TableDataRow>;
@@ -101,13 +119,14 @@ export class TableDataComponent {
       datasource,
       control: this.gridControl,
       columns: [],
-      readonly: true,
+      readonly: false,
       serverSideFiltering: true,
       enableQuickFilter: true,
       showFilterPanel: true,
       showSidebar: true,
       hideGridStatusBar: false,
       allowAddRows: false,
+      showChangedCellIndicator: true,
       zebraStripes: true,
       rowSelection: 'single',
       gridId: `query_data_${this.id()}`,
@@ -146,6 +165,13 @@ export class TableDataComponent {
       if (version !== this.requestVersion) return;
       this.totalRows.set(result.totalRows);
       this.gridState.datasource.setData(result.rows);
+      this.keyFields = result.keyFields;
+      this.rowVersions = result.rowVersions;
+      this.originalRows = result.rows.map((row) => ({ ...row }));
+      this.newRows.clear();
+      this.canUpdateRows.set(result.canUpdateRows);
+      this.canInsertRows.set(result.canInsertRows);
+      gridProvider.allowAddRows = result.canInsertRows;
       this.gridControl.setTotalRows(result.totalRows);
       if (!sameColumns(this.currentColumns, result.columns)) {
         this.currentColumns = result.columns;
@@ -153,7 +179,10 @@ export class TableDataComponent {
           field: column.name,
           header: column.name,
           type: 'text',
-          editable: false,
+          editable: column.editable || column.insertable,
+          cellReadonly: ({ originalIndex }) => this.newRows.has(originalIndex)
+            ? !column.insertable || !this.canInsertRows()
+            : !column.editable || !this.canUpdateRows(),
           width: column.name.length > 18 ? 190 : 150,
         }));
         gridProvider.columns.set(columns);
@@ -164,6 +193,99 @@ export class TableDataComponent {
       if (version === this.requestVersion) {
         this.error.set(error instanceof Error ? error.message : 'Unable to load rows from this table.');
       }
+    }
+  }
+
+  /** Records the blank row so its editable cells and eventual insert can be permission-gated. */
+  prepareAddRow(event: NewRecord<TableDataRow>): void {
+    if (!this.canInsertRows()) return;
+    this.newRows.set(event.index, {
+      draftId: crypto.randomUUID(),
+      baseline: { ...event.data },
+    });
+  }
+
+  /** Persists or stages one fully edited row, never issuing a request for an individual cell. */
+  async saveRow(event: RowUpdateEvent<TableDataRow>): Promise<void> {
+    const [params, query] = this.routeState();
+    const connection = this.connections.activeConnection();
+    const table = params.get('tableName');
+    const schema = query.get('schema') ?? 'public';
+    const newRow = this.newRows.get(event.originalIndex);
+    if (newRow) {
+      await this.saveNewRow(event, newRow);
+      return;
+    }
+    const baseline = this.originalRows[event.originalIndex];
+    const expectedVersion = this.rowVersions[event.originalIndex];
+    if (!connection || !table || !baseline || !expectedVersion || !this.keyFields.length) return;
+    const changes: Record<string, string | null> = {};
+    for (const column of this.currentColumns) {
+      if (column.editable && event.row[column.name] !== baseline[column.name]) {
+        changes[column.name] = event.row[column.name];
+      }
+    }
+    if (!Object.keys(changes).length) {
+      this.gridControl.clearChangedCells(event.originalIndex);
+      return;
+    }
+    const key = Object.fromEntries(this.keyFields.map((field) => [field, baseline[field]]));
+    const update = { key, expectedVersion, changes };
+    this.error.set(null);
+    try {
+      if (this.saveChangesToRunbook()) {
+        const snapshot = await this.connections.inspectTable(connection.connectionId, schema, table);
+        await this.runbook.stageDataRowUpdate(connection, snapshot, update);
+        this.gridControl.clearChangedCells(event.originalIndex);
+        this.error.set(null);
+        return;
+      }
+      await this.connections.updateTableDataRow(connection.connectionId, schema, table, update);
+      this.gridControl.indicate(event.originalIndex,'var(--color-success)');
+      this.gridControl.clearChangedCells(event.originalIndex);
+      this.refresh();
+    } catch (error) {
+      this.gridControl.indicate(event.originalIndex, 'var(--color-danger)');
+      this.error.set(error instanceof Error ? error.message : 'Unable to save this row. Refresh the table and try again.');
+    }
+  }
+
+  /** Saves or stages a completed new row, omitting untouched blank cells so database defaults apply. */
+  private async saveNewRow(
+    event: RowUpdateEvent<TableDataRow>,
+    draft: { draftId: string; baseline: TableDataRow },
+  ): Promise<void> {
+    const [params, query] = this.routeState();
+    const connection = this.connections.activeConnection();
+    const table = params.get('tableName');
+    const schema = query.get('schema') ?? 'public';
+    if (!connection || !table || !this.canInsertRows()) return;
+    const values: Record<string, string | null> = {};
+    for (const column of this.currentColumns) {
+      if (column.insertable && event.row[column.name] !== draft.baseline[column.name]) {
+        values[column.name] = event.row[column.name];
+      }
+    }
+    if (!Object.keys(values).length) {
+      this.error.set('Enter a value in at least one insertable field before saving this row.');
+      return;
+    }
+    const insert = { draftId: draft.draftId, values };
+    this.error.set(null);
+    try {
+      if (this.saveChangesToRunbook()) {
+        const snapshot = await this.connections.inspectTable(connection.connectionId, schema, table);
+        await this.runbook.stageDataRowInsert(connection, snapshot, insert);
+        this.gridControl.clearChangedCells(event.originalIndex);
+        return;
+      }
+      await this.connections.insertTableDataRow(connection.connectionId, schema, table, insert);
+      this.gridControl.clearChangedCells(event.originalIndex);
+      this.newRows.delete(event.originalIndex);
+      this.refresh();
+    } catch (error) {
+      this.gridControl.indicate(event.originalIndex, 'var(--color-danger)');
+      this.error.set(error instanceof Error ? error.message : 'Unable to add this row. Check the field values and database permissions.');
     }
   }
 }
@@ -204,5 +326,7 @@ function sameColumns(
   right: TableDataQueryResponse['columns'],
 ): boolean {
   return left.length === right.length && left.every((column, index) =>
-    column.name === right[index]?.name && column.dataType === right[index]?.dataType);
+    column.name === right[index]?.name && column.dataType === right[index]?.dataType
+    && column.editable === right[index]?.editable
+    && column.insertable === right[index]?.insertable);
 }

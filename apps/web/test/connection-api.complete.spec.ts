@@ -134,8 +134,10 @@ describe('ConnectionApiService API surface', () => {
   it('validates table query responses and reports malformed server payloads', async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       if (String(input) === '/api/connections') return jsonResponse([]);
-      return jsonResponse({ columns: [{ ordinalPosition: 1, name: 'id', dataType: 'integer', nullable: false }],
-        rows: [{ id: '1' }], totalRows: 1 });
+      return jsonResponse({
+        columns: [{ ordinalPosition: 1, name: 'id', dataType: 'integer', nullable: false, editable: false, insertable: true }],
+        rows: [{ id: '1' }], keyFields: ['id'], rowVersions: ['1'], canUpdateRows: true, canInsertRows: true, totalRows: 1,
+      });
     });
     vi.stubGlobal('fetch', fetchMock);
     const service = new ConnectionApiService();

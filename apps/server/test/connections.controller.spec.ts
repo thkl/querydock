@@ -24,7 +24,7 @@ const connection: ConnectResponse = {
   serverVersion: '16.2',
   capabilities: {
     discoverResources: true, inspectTables: true, browseData: true,
-    mutateData: false, editSchema: true, executeSql: false,
+    mutateData: true, editSchema: true, executeSql: false,
   },
   schemaCapabilities: { createTableIfNotExists: true },
 };
@@ -94,7 +94,7 @@ describe('ConnectionsController', () => {
     expect(postgres.verifyConnection).toHaveBeenCalledWith(configuration);
     expect(sessions.addConnection).toHaveBeenCalledWith(expect.anything(), expect.anything(), configuration, expect.objectContaining({
       serverVersion: '16.2',
-      capabilities: expect.objectContaining({ browseData: true, mutateData: false, executeSql: false }),
+      capabilities: expect.objectContaining({ browseData: true, mutateData: true, executeSql: false }),
     }));
     expect(result).toEqual(connection);
   });

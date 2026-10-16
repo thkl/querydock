@@ -8,6 +8,8 @@ import type {
   SchemaFieldDraftRequest,
   SchemaOperation,
   TableSnapshot,
+  TableDataRowUpdate,
+  TableDataRowInsert,
 } from '@querydock/contracts';
 import { ApiRequestError, ConnectionApiService } from '../connections/connection-api.service';
 
@@ -310,6 +312,106 @@ export class RunbookService {
       return;
     }
 
+    this.previewing.set(true);
+    try {
+      const preview = await this.connections.previewMigration(connection.connectionId, {
+        schema: baseline.schema,
+        table: baseline.name,
+        baselineFingerprint: baseline.fingerprint,
+        operations,
+      });
+      const runbook: SchemaRunbook = {
+        target: connection.target,
+        schema: baseline.schema,
+        table: baseline.name,
+        baseline,
+        operations,
+        preview,
+        appliedBatches: current?.appliedBatches ?? [],
+        applyOutcomeUnknown: false,
+      };
+      this.setRunbookForTarget(connection.target, runbook);
+      await this.persist(runbook);
+    } catch (error) {
+      this.error.set(messageOf(error));
+      throw error;
+    } finally {
+      this.previewing.set(false);
+    }
+  }
+
+  /** Stages one completed row edit as server-generated SQL in the database runbook. */
+  async stageDataRowUpdate(
+    connection: ConnectResponse,
+    snapshot: TableSnapshot,
+    update: TableDataRowUpdate,
+  ): Promise<void> {
+    await this.ready;
+    this.error.set(null);
+    const current = this.runbookForTarget(connection.target);
+    const matches = current && sameRunbookResource(current, connection.target, snapshot.schema, snapshot.name);
+    if (current?.applyOutcomeUnknown) throw new Error('The previous Apply outcome is unknown. Inspect the database before staging or applying more changes.');
+    if (current?.operations.length && !matches) {
+      throw new Error('This database runbook has pending changes for another table. Apply or clear those changes before staging a row edit.');
+    }
+    if (current?.operations.some((operation) => operation.kind !== 'updateDataRow' && operation.kind !== 'insertDataRow')) {
+      throw new Error('Apply or discard the pending schema changes before staging data row edits.');
+    }
+
+    const identity = JSON.stringify(Object.entries(update.key).sort(([a], [b]) => a.localeCompare(b)));
+    const retained = (current?.operations ?? []).filter((operation) => operation.kind !== 'updateDataRow'
+      || JSON.stringify(Object.entries(operation.key).sort(([a], [b]) => a.localeCompare(b))) !== identity);
+    const operations: SchemaOperation[] = [...retained, { kind: 'updateDataRow', ...update }];
+    const baseline = current?.baseline ?? snapshot;
+    this.previewing.set(true);
+    try {
+      const preview = await this.connections.previewMigration(connection.connectionId, {
+        schema: baseline.schema,
+        table: baseline.name,
+        baselineFingerprint: baseline.fingerprint,
+        operations,
+      });
+      const runbook: SchemaRunbook = {
+        target: connection.target,
+        schema: baseline.schema,
+        table: baseline.name,
+        baseline,
+        operations,
+        preview,
+        appliedBatches: current?.appliedBatches ?? [],
+        applyOutcomeUnknown: false,
+      };
+      this.setRunbookForTarget(connection.target, runbook);
+      await this.persist(runbook);
+    } catch (error) {
+      this.error.set(messageOf(error));
+      throw error;
+    } finally {
+      this.previewing.set(false);
+    }
+  }
+
+  /** Stages one new grid row as reviewed SQL, replacing a prior edit to the same draft row. */
+  async stageDataRowInsert(
+    connection: ConnectResponse,
+    snapshot: TableSnapshot,
+    insert: TableDataRowInsert,
+  ): Promise<void> {
+    await this.ready;
+    this.error.set(null);
+    const current = this.runbookForTarget(connection.target);
+    const matches = current && sameRunbookResource(current, connection.target, snapshot.schema, snapshot.name);
+    if (current?.applyOutcomeUnknown) throw new Error('The previous Apply outcome is unknown. Inspect the database before staging or applying more changes.');
+    if (current?.operations.length && !matches) {
+      throw new Error('This database runbook has pending changes for another table. Apply or clear those changes before staging a row.');
+    }
+    if (current?.operations.some((operation) => operation.kind !== 'updateDataRow' && operation.kind !== 'insertDataRow')) {
+      throw new Error('Apply or discard the pending schema changes before staging data rows.');
+    }
+    const retained = (current?.operations ?? []).filter((operation) =>
+      operation.kind !== 'insertDataRow' || operation.draftId !== insert.draftId);
+    const operations: SchemaOperation[] = [...retained, { kind: 'insertDataRow', ...insert }];
+    const baseline = current?.baseline ?? snapshot;
     this.previewing.set(true);
     try {
       const preview = await this.connections.previewMigration(connection.connectionId, {

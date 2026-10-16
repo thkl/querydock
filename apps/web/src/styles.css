@@ -23,6 +23,7 @@
   --color-draft: var(--color-warning);
   --color-draft-subtle: color-mix(in srgb, var(--color-draft) 11%, transparent);
   --color-draft-border: color-mix(in srgb, var(--color-draft) 32%, var(--color-border));
+  --color-success: #059820;
   --color-danger: #ff8e91;
   --color-danger-bg: color-mix(in srgb, var(--color-danger) 12%, transparent);
   --sql-color-keyword: #c4b5fd;

@@ -151,7 +151,7 @@ Use the [Milestone E completion checklist](milestone-e-completion-checklist.md) 
 - A guided primary-key field picker in the schema grid, using a dropdown or integrated sidebar instead of requiring comma-separated field names.
 - Inline syntax help and examples for CHECK constraint expressions.
 - A visual foreign-key editor in the relationship diagram that guides users to compatible target tables and key fields.
-- A additional MS SQLServer Adapter to confirm the app is multi database ready.
+- A second, materially different SQL Server adapter in Milestone E to test that the client depends on shared contracts and declared capabilities rather than PostgreSQL-specific behavior. Both adapters should support the same workflows where their capabilities allow it; genuine engine differences must be reported through adapter contracts and UI capability handling.
 
 ### Candidate scope (to confirm)
 
@@ -176,6 +176,7 @@ Use the [Milestone E completion checklist](milestone-e-completion-checklist.md) 
 - Adding a primary key presents the available table fields for selection, supports the adapter's valid key shape, and stages the chosen fields in the runbook.
 - Adding a CHECK constraint explains the expected expression syntax with relevant examples; server-side validation errors identify how to correct invalid expressions.
 - Foreign-key editing shows target primary/unique key sets reported by the adapter, marks compatible choices, explains field-count/type mismatches, and stages only compatible references.
+- PostgreSQL and SQL Server can each connect, discover resources, inspect schemas, browse data, and use the shared client workflows for operations supported by their declared capabilities. Engine-specific SQL, identifiers, types, permissions, and unsupported operations remain adapter-owned and do not leak PostgreSQL assumptions into the client.
 
 Confirm keyless-table behavior and precise concurrency rules before implementing writes; initially read-only is the recommended fallback.
 
