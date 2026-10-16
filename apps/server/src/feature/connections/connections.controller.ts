@@ -44,6 +44,7 @@ export class ConnectionsController {
     private readonly postgres: PostgresAdapter,
   ) {}
 
+  /** Validates settings, verifies database access, and creates a session-scoped connection. */
   @Post()
   async connect(
     @Body() body: unknown,
@@ -73,6 +74,7 @@ export class ConnectionsController {
     });
   }
 
+  /** Returns the active connection summaries for the browser session. */
   @Get()
   listConnections(
     @Req() request: Request,
@@ -81,6 +83,7 @@ export class ConnectionsController {
     return this.sessions.listConnections(request, response);
   }
 
+  /** Lists visible tables and views through the configured database adapter. */
   @Get(':connectionId/resources')
   async listResources(
     @Param('connectionId') connectionId: string,
@@ -95,6 +98,7 @@ export class ConnectionsController {
     }
   }
 
+  /** Returns server-defined field types for schema editing after checking session ownership. */
   @Get(':connectionId/schema/field-types')
   editableFieldTypes(
     @Param('connectionId') connectionId: string,
@@ -105,6 +109,7 @@ export class ConnectionsController {
     return this.postgres.editableFieldTypes();
   }
 
+  /** Inspects a visible table and maps absence or database failures to safe HTTP errors. */
   @Get(':connectionId/tables')
   async inspectTable(
     @Param('connectionId') connectionId: string,
@@ -129,6 +134,7 @@ export class ConnectionsController {
     }
   }
 
+  /** Reads one bounded, filtered page of table rows through a read-only adapter operation. */
   @Post(':connectionId/tables/:schema/:table/data/query')
   @HttpCode(200)
   async queryTableData(
@@ -150,6 +156,7 @@ export class ConnectionsController {
     }
   }
 
+  /** Returns compatible and incompatible unique-key targets for a proposed foreign key. */
   @Post(':connectionId/tables/:schema/:table/foreign-key-targets/:targetSchema/:targetTable/fields')
   async foreignKeyFieldChoices(
     @Param('connectionId') connectionId: string,
@@ -174,6 +181,7 @@ export class ConnectionsController {
     }
   }
 
+  /** Produces SQL and warnings for the submitted schema operations without applying them. */
   @Post(':connectionId/migrations/preview')
   @HttpCode(200)
   async previewMigration(
@@ -192,6 +200,7 @@ export class ConnectionsController {
     }
   }
 
+  /** Validates a field editor draft and returns the resulting migration preview. */
   @Post(':connectionId/migrations/field-draft')
   @HttpCode(200)
   async previewSchemaFieldDraft(
@@ -210,6 +219,7 @@ export class ConnectionsController {
     }
   }
 
+  /** Applies only the exact reviewed statements and warnings accepted by the client. */
   @Post(':connectionId/migrations/apply')
   @HttpCode(200)
   async applyMigration(
@@ -228,6 +238,7 @@ export class ConnectionsController {
     }
   }
 
+  /** Closes a connection owned by the current session. */
   @Delete(':connectionId')
   @HttpCode(204)
   disconnect(
@@ -238,6 +249,7 @@ export class ConnectionsController {
     this.sessions.removeConnection(request, response, connectionId);
   }
 
+  /** Converts driver failures to a generic message, exposing only adapter-approved text. */
   private asSafeDatabaseException(error: unknown): BadGatewayException {
     const message = error instanceof PostgresConnectionError
       ? error.safeMessage
@@ -245,6 +257,7 @@ export class ConnectionsController {
     return new BadGatewayException(message);
   }
 
+  /** Maps migration validation, drift, visibility, and unexpected failures to HTTP status codes. */
   private asMigrationException(error: unknown): BadGatewayException | BadRequestException | ConflictException | NotFoundException | InternalServerErrorException {
     if (error instanceof MigrationPlanError) {
       if (error.kind === 'not-found') return new NotFoundException(error.message);

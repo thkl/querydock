@@ -50,6 +50,39 @@ describe('WorkspacePagesService', () => {
     expect(first).toMatchObject({ label: 'orders', title: 'alpha · public.orders', route: '/tables/orders/schema?schema=public' });
   });
 
+  it('registers one data tab per connection and closes the active page to another open tab', () => {
+    const { pages, router, events, connections } = createHarness();
+    const first = pages.registerOpenedTableData('connection-a', 'public', 'orders');
+    const reopened = pages.registerOpenedTableData('connection-a', 'public', 'orders');
+    const other = pages.registerOpenedTableSchema('connection-b', 'sales', 'invoices');
+    expect(reopened).toBe(first);
+    expect(first).toMatchObject({ label: 'orders · Data', title: 'alpha · public.orders data' });
+    events.next(new NavigationEnd(2, '/', first.route));
+    expect(pages.activeDataPage()).toEqual(first);
+
+    pages.closeDataPage(first);
+
+    expect(pages.dataPages()).toEqual([]);
+    expect(connections.selectConnection).toHaveBeenCalledWith('connection-b');
+    expect(router.navigateByUrl).toHaveBeenLastCalledWith(other.route);
+  });
+
+  it('keeps one relationship diagram tab per connection and closes it without losing other tabs', () => {
+    const { pages, events, router } = createHarness();
+    const first = pages.registerOpenedRelationshipDiagram('connection-a');
+    const reopened = pages.registerOpenedRelationshipDiagram('connection-a');
+    const other = pages.registerOpenedTableSchema('connection-b', 'sales', 'invoices');
+    expect(reopened).toBe(first);
+    expect(first).toMatchObject({ label: 'Relationships · alpha', title: 'alpha · Relationships' });
+    events.next(new NavigationEnd(3, '/', first.route));
+    expect(pages.activeRelationshipPage()).toEqual(first);
+
+    pages.closeRelationshipPage(first);
+
+    expect(pages.relationshipPages()).toEqual([]);
+    expect(router.navigateByUrl).toHaveBeenLastCalledWith(other.route);
+  });
+
   it('keeps same-named tables from different connections as separate pages', () => {
     const { pages } = createHarness();
     const first = pages.registerOpenedTableSchema('connection-a', 'public', 'orders');

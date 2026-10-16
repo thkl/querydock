@@ -20,6 +20,7 @@ export class RunbookComponent {
   private readonly workspacePages = inject(WorkspacePagesService);
   private readonly connections = inject(ConnectionApiService);
 
+  /** Confirms adapter warnings, applies the batch, and updates renamed/dropped table tabs. */
   async apply(): Promise<void> {
     const warnings = this.runbook.runbook()?.preview?.warnings ?? [];
     let acknowledgedWarnings: string[] = [];
@@ -52,14 +53,17 @@ export class RunbookComponent {
     }
   }
 
+  /** Discards the current staged operations. */
   discard(): void {
     void this.runbook.discardPending();
   }
 
+  /** Downloads SQL from batches that the server previously confirmed as applied. */
   export(): void {
     void this.runbook.exportAppliedSql();
   }
 
+  /** Confirms and reconciles a batch whose database outcome could not be determined. */
   async resolveUnknown(outcome: 'applied' | 'notApplied'): Promise<void> {
     const message = outcome === 'applied'
       ? 'Confirm only after inspecting the database and verifying that the entire batch was applied.'
@@ -88,6 +92,7 @@ export class RunbookComponent {
     }
   }
 
+  /** Asks before deleting the saved runbook and its locally recorded SQL history. */
   async clearRunbook(): Promise<void> {
     const confirmed = await this.confirmation.confirm({
       title: 'Clear this runbook?',
@@ -99,6 +104,7 @@ export class RunbookComponent {
     void this.runbook.clearRunbook();
   }
 
+  /** Finds the live session connection matching the runbook's database target. */
   private connectionIdFor(state: SchemaRunbook): string | null {
     return this.connections.connections().find(({ target }) => target.adapter === state.target.adapter
       && target.host === state.target.host && target.port === state.target.port

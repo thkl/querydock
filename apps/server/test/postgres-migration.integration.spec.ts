@@ -2,7 +2,12 @@ import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { MigrationApplyRequest, MigrationPreviewRequest, PostgresConnectRequest } from '@querydock/contracts';
+import type {
+  MigrationApplyRequest,
+  MigrationPreviewRequest,
+  PostgresConnectRequest,
+  SchemaFieldDraftRequest,
+} from '@querydock/contracts';
 import { MigrationPlanError, PostgresAdapter } from '../src/feature/postgres/postgres.adapter.ts';
 
 interface PgClient {
@@ -79,11 +84,60 @@ describe.skipIf(!databaseUrl)('PostgreSQL Milestone D integration (disposable da
     await admin.query(`INSERT INTO "${schema}"."parent" (code) VALUES ('P-1')`);
     await admin.query(`INSERT INTO "${schema}"."child" (parent_id, label) VALUES (1, 'first')`);
 
+    const verified = await adapter.verifyConnection(configuration);
+    expect(verified.serverVersion).toMatch(/^\d/);
+    expect(adapter.editableFieldTypes().some(({ value }) => value === 'jsonb')).toBe(true);
+    expect((await adapter.listResources(configuration)).some((resource) => resource.schema === schema && resource.name === 'child')).toBe(true);
+    expect(child.fields.map(({ name }) => name)).toEqual(['id', 'parent_id', 'label']);
+
+    const filteredRows = await adapter.queryTableData(configuration, schema, 'child', {
+      offset: 0, limit: 10, sort: [{ field: 'id', direction: 'asc' }],
+      filters: [{ field: 'label', operator: 'contains', value: 'fir' }], quickFilter: '',
+    });
+    expect(filteredRows).toMatchObject({
+      totalRows: 1,
+      columns: [
+        { name: 'id', dataType: 'bigint' },
+        { name: 'parent_id', dataType: 'bigint' },
+        { name: 'label', dataType: 'character varying' },
+      ],
+      rows: [{ id: '1', parent_id: '1', label: 'first' }],
+    });
+    await expect(adapter.queryTableData(configuration, schema, 'child', {
+      offset: 0, limit: 10, sort: [],
+      filters: [{ field: 'missing', operator: 'eq', value: 'x' }], quickFilter: '',
+    })).rejects.toMatchObject({ kind: 'invalid' });
+    await expect(adapter.queryTableData(configuration, schema, 'missing', {
+      offset: 0, limit: 10, sort: [], filters: [], quickFilter: '',
+    })).rejects.toMatchObject({ kind: 'not-found' });
+
+    const fieldDraft: SchemaFieldDraftRequest = {
+      schema,
+      table: 'child',
+      baselineFingerprint: child.fingerprint,
+      operations: [],
+      draft: { sourceName: null, name: 'note', type: 'text', typeDetails: '', defaultValue: '' },
+    };
+    const fieldPreview = await adapter.previewSchemaFieldDraft(configuration, fieldDraft);
+    expect(fieldPreview.operations).toMatchObject([{ kind: 'addNullableField', name: 'note', type: 'text' }]);
+    expect(fieldPreview.statements).toEqual([`ALTER TABLE "${schema}"."child" ADD COLUMN "note" text;`]);
+
     await apply(parent.name, parent.fingerprint, [
       { kind: 'addConstraint', constraintKind: 'primaryKey', name: 'parent_pk', fieldNames: ['id'] },
     ]);
+    expect(await adapter.foreignKeyFieldChoices(configuration, schema, 'child', schema, 'parent', ['parent_id']))
+      .toMatchObject({ fieldSets: [{ fieldNames: ['id'], compatible: true, reason: null }] });
+    expect(await adapter.foreignKeyFieldChoices(configuration, schema, 'child', schema, 'parent', ['label']))
+      .toMatchObject({ fieldSets: [{ fieldNames: ['id'], compatible: false }] });
     const childBaseline = await adapter.inspectTable(configuration, schema, 'child');
     if (!childBaseline) throw new Error('The child table disappeared before its migration.');
+    await expect(adapter.previewMigration(configuration, {
+      schema, table: 'child', baselineFingerprint: childBaseline.fingerprint,
+      operations: [
+        { kind: 'renameTable', newName: 'child_renamed' },
+        { kind: 'addNullableField', name: 'pending_note', type: 'text' },
+      ],
+    })).rejects.toMatchObject({ kind: 'invalid' });
     await expect(adapter.previewMigration(configuration, {
       schema, table: 'child', baselineFingerprint: childBaseline.fingerprint,
       operations: [{ kind: 'addConstraint', constraintKind: 'foreignKey', name: 'invalid_child_parent_fk',

@@ -18,9 +18,13 @@ export interface RelationshipDiagramViewState {
 export class RelationshipDiagramStateService {
   readonly byConnection = signal<ReadonlyMap<string, RelationshipDiagramViewState>>(new Map());
 
+  /** Returns persisted diagram state for one connection without sharing mutable position objects. */
   viewFor(connectionId: string): RelationshipDiagramViewState {
     const view = this.byConnection().get(connectionId);
-    return view ? { ...view, tablePositions: { ...view.tablePositions } } : {
+    return view ? {
+      ...view,
+      tablePositions: Object.fromEntries(Object.entries(view.tablePositions).map(([key, point]) => [key, { ...point }])),
+    } : {
       snapshots: null,
       partialLoadCount: 0,
       tablePositions: {},
@@ -29,6 +33,7 @@ export class RelationshipDiagramStateService {
     };
   }
 
+  /** Caches loaded table snapshots and whether loading was limited to a partial result. */
   saveSnapshots(connectionId: string, snapshots: TableSnapshot[], partialLoadCount: number): void {
     this.update(connectionId, (current) => ({
       ...current,
@@ -37,14 +42,20 @@ export class RelationshipDiagramStateService {
     }));
   }
 
+  /** Persists node positions independently for each connected database. */
   saveTablePositions(connectionId: string, tablePositions: Record<string, DiagramPoint>): void {
-    this.update(connectionId, (current) => ({ ...current, tablePositions: { ...tablePositions } }));
+    this.update(connectionId, (current) => ({
+      ...current,
+      tablePositions: Object.fromEntries(Object.entries(tablePositions).map(([key, point]) => [key, { ...point }])),
+    }));
   }
 
+  /** Persists the diagram scroll offset so tab changes restore the same viewport. */
   saveViewport(connectionId: string, scrollLeft: number, scrollTop: number): void {
     this.update(connectionId, (current) => ({ ...current, scrollLeft, scrollTop }));
   }
 
+  /** Copies the connection map before applying one immutable view-state update. */
   private update(
     connectionId: string,
     change: (current: RelationshipDiagramViewState) => RelationshipDiagramViewState,

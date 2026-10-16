@@ -18,6 +18,7 @@ export class WorkspaceSidebarComponent {
   readonly pages = inject(WorkspacePagesService);
   readonly disconnectConfirmationId = signal<string | null>(null);
 
+  /** Formats a connection tree label using its saved name or database target. */
   connectionLabel(connectionId: string): string {
     const connection = this.connections.connections().find(({ connectionId: id }) => id === connectionId);
     if (!connection) return 'Disconnected';
@@ -32,6 +33,7 @@ export class WorkspaceSidebarComponent {
     return `${target.database} · ${target.host}:${target.port} · ${target.username}`;
   }
 
+  /** Confirms and closes the selected connection and its workspace tabs. */
   async disconnect(connectionId: string): Promise<void> {
     if (this.disconnectConfirmationId() !== connectionId) {
       this.disconnectConfirmationId.set(connectionId);
@@ -42,11 +44,13 @@ export class WorkspaceSidebarComponent {
     if (disconnected) this.pages.closeConnectionPages(connectionId);
   }
 
+  /** Opens the selected resource's schema page in the workspace tab bar. */
   openResourceSchema(schema: string, table: string): void {
     const connectionId = this.connections.activeConnectionId();
     if (connectionId) this.pages.openTableSchema(connectionId, schema, table);
   }
 
+  /** Opens the selected resource in the read-only data browser. */
   openDataView(schema: string, table: string): void {
     const connection = this.connections.activeConnection();
     if (connection && table && connection.capabilities.browseData) {

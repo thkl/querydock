@@ -106,6 +106,7 @@ export class RelationshipDiagramComponent {
   private readonly diagramViewport = viewChild<ElementRef<HTMLDivElement>>('diagramViewport');
   private readonly relationshipSvg = viewChild<ElementRef<SVGSVGElement>>('relationshipSvg');
 
+  /** Restores cached diagram state, reloads metadata on connection changes, and keeps paths aligned after render. */
   constructor() {
     this.destroyRef.onDestroy(() => this.viewportResizeObserver?.disconnect());
     afterRenderEffect(() => {
@@ -172,14 +173,17 @@ export class RelationshipDiagramComponent {
     });
   }
 
+  /** Calculates a table card's horizontal coordinate in the current diagram layout. */
   nodeX(index: number): number {
     return this.nodePosition(index).x;
   }
 
+  /** Calculates a table card's vertical coordinate in the current diagram layout. */
   nodeY(index: number): number {
     return this.nodePosition(index).y;
   }
 
+  /** Uses a saved drag position or the calculated initial grid position. */
   nodePosition(index: number): DiagramPoint {
     const snapshot = this.snapshots()[index];
     if (!snapshot) return { x: 20, y: 20 };
@@ -196,14 +200,17 @@ export class RelationshipDiagramComponent {
     return { x: 20 + (index % columnCount) * (CARD_WIDTH + COLUMN_GAP), y };
   }
 
+  /** Computes card height from its title and visible field rows. */
   cardHeight(snapshot: TableSnapshot): number {
     return CARD_HEADER_HEIGHT + 8 + Math.max(1, snapshot.fields.length) * FIELD_ROW_HEIGHT + 40;
   }
 
+  /** Returns the stable schema-qualified identity of a table card. */
   nodeKey(snapshot: TableSnapshot): string {
     return this.tableKey(snapshot.schema, snapshot.name);
   }
 
+  /** Builds a bezier path anchored to the participating field rows. */
   relationshipPath(relationship: DiagramRelationship): string | null {
     const sourceIndex = this.snapshots().findIndex((item) => item.schema === relationship.sourceSchema
       && item.name === relationship.sourceTable);
@@ -236,6 +243,7 @@ export class RelationshipDiagramComponent {
     return `M ${sourcePoint.x} ${sourcePoint.y} C ${sourcePoint.x + bend * direction} ${sourcePoint.y}, ${targetPoint.x - bend * direction} ${targetPoint.y}, ${targetPoint.x} ${targetPoint.y}`;
   }
 
+  /** Finds the center point of a set of field rows on one side of a table card. */
   private fieldRowsPoint(snapshot: TableSnapshot, fieldNames: string[], side: 'left' | 'right'): DiagramPoint | null {
     const anchors = fieldNames.map((name) => this.fieldAnchors()[this.fieldAnchorKey(snapshot, name)]).filter((anchor): anchor is FieldAnchor => !!anchor);
     if (!anchors.length) return null;
@@ -245,6 +253,7 @@ export class RelationshipDiagramComponent {
     };
   }
 
+  /** Measures rendered field rows so relationship paths align after layout updates. */
   private measureFieldAnchors(): void {
     const canvas = this.diagramCanvas()?.nativeElement;
     const svg = this.relationshipSvg()?.nativeElement;
@@ -275,6 +284,7 @@ export class RelationshipDiagramComponent {
     this.fieldAnchors.set(anchors);
   }
 
+  /** Chooses a responsive table-column count from the available canvas width. */
   private updateColumnCount(viewport = this.diagramViewport()?.nativeElement): void {
     if (!viewport) return;
     const width = viewport.clientWidth || viewport.getBoundingClientRect().width;
@@ -283,21 +293,25 @@ export class RelationshipDiagramComponent {
   }
 
   @HostListener('window:resize')
+  /** Recalculates the responsive diagram layout after a viewport resize. */
   onWindowResize(): void {
     this.updateColumnCount();
     requestAnimationFrame(() => this.measureFieldAnchors());
   }
 
+  /** Saves the current scroll offset under the active connection. */
   saveViewport(event: Event): void {
     const connectionId = this.connections.activeConnectionId();
     const viewport = event.currentTarget as HTMLDivElement;
     if (connectionId) this.diagramState.saveViewport(connectionId, viewport.scrollLeft, viewport.scrollTop);
   }
 
+  /** Creates a stable anchor lookup key from a table and field name. */
   private fieldAnchorKey(snapshot: TableSnapshot, fieldName: string): string {
     return JSON.stringify([this.tableKey(snapshot.schema, snapshot.name), fieldName]);
   }
 
+  /** Begins dragging a table card and captures the pointer for continuous movement. */
   startTableDrag(event: PointerEvent, snapshot: TableSnapshot): void {
     if (event.button !== 0 || (event.target as HTMLElement).closest('button')) return;
     const index = this.snapshots().indexOf(snapshot);
@@ -315,6 +329,7 @@ export class RelationshipDiagramComponent {
   }
 
   @HostListener('window:pointermove', ['$event'])
+  /** Moves the active table card and persists its new canvas position. */
   moveTable(event: PointerEvent): void {
     const drag = this.dragState;
     if (!drag || event.pointerId !== drag.pointerId) return;
@@ -329,18 +344,21 @@ export class RelationshipDiagramComponent {
   }
 
   @HostListener('window:pointerup', ['$event'])
+  /** Releases pointer capture and completes the current table drag. */
   endTableDrag(event: PointerEvent): void {
     if (!this.dragState || event.pointerId !== this.dragState.pointerId) return;
     this.dragState = null;
     this.draggingTableKey.set(null);
   }
 
+  /** Focuses one relationship and dims unrelated tables and paths. */
   onRelationshipClick(event: Event, relationship: DiagramRelationship): void {
     event.stopPropagation();
     this.selectedRelationshipId.set(relationship.id);
     this.closeContextMenu();
   }
 
+  /** Focuses relationships that include the selected table field. */
   onFieldClick(event: MouseEvent, snapshot: TableSnapshot, fieldName: string): void {
     event.stopPropagation();
     const matches = this.relationshipsForField(snapshot, fieldName);
@@ -348,6 +366,7 @@ export class RelationshipDiagramComponent {
     this.closeContextMenu();
   }
 
+  /** Opens the relationship action menu at the pointer location. */
   openRelationshipContext(event: MouseEvent, relationship: DiagramRelationship): void {
     event.preventDefault();
     event.stopPropagation();
@@ -355,6 +374,7 @@ export class RelationshipDiagramComponent {
     this.setContextMenu(event, [relationship.id]);
   }
 
+  /** Opens actions for relationships connected to the selected field. */
   openFieldContext(event: MouseEvent, snapshot: TableSnapshot, fieldName: string): void {
     event.preventDefault();
     event.stopPropagation();
@@ -364,31 +384,37 @@ export class RelationshipDiagramComponent {
     this.setContextMenu(event, matches.map(({ id }) => id));
   }
 
+  /** Finds every relationship touching a table field. */
   relationshipsForField(snapshot: TableSnapshot, fieldName: string): DiagramRelationship[] {
     return this.relationships().filter((relationship) =>
       (relationship.sourceSchema === snapshot.schema && relationship.sourceTable === snapshot.name && relationship.fieldNames.includes(fieldName))
       || (relationship.referencedSchema === snapshot.schema && relationship.referencedTable === snapshot.name && relationship.referencedFieldNames.includes(fieldName)));
   }
 
+  /** Clears relationship focus and restores normal opacity for all diagram elements. */
   clearRelationshipFocus(): void {
     this.selectedRelationshipId.set(null);
     this.closeContextMenu();
   }
 
+  /** Closes the currently visible relationship action menu. */
   closeContextMenu(): void {
     this.contextMenu.set(null);
   }
 
+  /** Opens the editor for the relationship selected from the context menu. */
   contextEdit(relationship: DiagramRelationship): void {
     this.closeContextMenu();
     void this.editRelationship(relationship);
   }
 
+  /** Stages removal for the selected relationship. */
   contextRemove(relationship: DiagramRelationship): void {
     this.closeContextMenu();
     void this.removeRelationship(relationship);
   }
 
+  /** Prevents the browser menu and positions the app's context actions. */
   private setContextMenu(event: MouseEvent, relationshipIds: string[]): void {
     const menuHeight = Math.min(relationshipIds.length * 88 + 20, 360);
     this.contextMenu.set({
@@ -398,11 +424,13 @@ export class RelationshipDiagramComponent {
     });
   }
 
+  /** Opens the selected table schema in the workspace tab bar. */
   openTable(snapshot: TableSnapshot): void {
     const connectionId = this.connections.activeConnectionId();
     if (connectionId) this.pages.openTableSchema(connectionId, snapshot.schema, snapshot.name);
   }
 
+  /** Reloads visible table snapshots and relationship metadata for this connection. */
   async refresh(): Promise<void> {
     const connection = this.connections.activeConnection();
     if (!connection) return;
@@ -415,6 +443,7 @@ export class RelationshipDiagramComponent {
     }
   }
 
+  /** Initializes a new foreign-key editor with the current connection's table choices. */
   startNewRelationship(): void {
     this.fieldSetRequestId++;
     this.editorBusy.set(false);
@@ -432,6 +461,7 @@ export class RelationshipDiagramComponent {
     this.editorOpen.set(true);
   }
 
+  /** Loads a relationship's source, target, and local field selections into the editor. */
   async editRelationship(relationship: DiagramRelationship): Promise<void> {
     this.fieldSetRequestId++;
     this.editingRelationship.set(relationship);
@@ -446,12 +476,14 @@ export class RelationshipDiagramComponent {
     await this.loadFieldSets();
   }
 
+  /** Closes the relationship editor and discards its unsaved form state. */
   closeEditor(): void {
     if (this.editorBusy()) return;
     this.editorOpen.set(false);
     this.editingRelationship.set(null);
   }
 
+  /** Updates the selected source table and resets dependent field selections. */
   onSourceChanged(event: Event): void {
     this.fieldSetRequestId++;
     this.editorBusy.set(false);
@@ -461,6 +493,7 @@ export class RelationshipDiagramComponent {
     this.selectedFieldSet.set('');
   }
 
+  /** Updates the target table and requests compatible unique-key field sets. */
   onTargetChanged(event: Event): void {
     this.fieldSetRequestId++;
     this.editorBusy.set(false);
@@ -469,6 +502,7 @@ export class RelationshipDiagramComponent {
     void this.loadFieldSets();
   }
 
+  /** Updates a local field selection and refreshes target key compatibility. */
   async onLocalFieldChanged(fieldName: string, event: Event): Promise<void> {
     const checked = (event.currentTarget as HTMLInputElement).checked;
     const selected = this.localFieldNames();
@@ -476,6 +510,7 @@ export class RelationshipDiagramComponent {
     await this.loadFieldSets();
   }
 
+  /** Stages the edited foreign-key operation in the database runbook. */
   async saveRelationship(): Promise<void> {
     const connection = this.connections.activeConnection();
     const source = this.sourceSnapshot();
@@ -521,6 +556,7 @@ export class RelationshipDiagramComponent {
     }
   }
 
+  /** Stages a constraint drop and updates the displayed relationship set. */
   async removeRelationship(relationship: DiagramRelationship): Promise<void> {
     if (!relationship.editable) return;
     const connection = this.connections.activeConnection();
@@ -548,15 +584,18 @@ export class RelationshipDiagramComponent {
     }
   }
 
+  /** Formats one or more field names for diagram labels. */
   fieldsLabel(fields: string[]): string {
     return fields.join(', ');
   }
 
+  /** Lists relationships whose source table is the supplied snapshot. */
   relationshipsFor(snapshot: TableSnapshot): DiagramRelationship[] {
     return this.relationships().filter(({ sourceSchema, sourceTable }) =>
       sourceSchema === snapshot.schema && sourceTable === snapshot.name);
   }
 
+  /** Checks whether a table participates in the focused relationship set. */
   isRelationshipParticipant(snapshot: TableSnapshot): boolean {
     const relationship = this.relationships().find(({ id }) => id === this.selectedRelationshipId());
     return !!relationship && (
@@ -565,6 +604,7 @@ export class RelationshipDiagramComponent {
     );
   }
 
+  /** Checks whether a field participates in a currently focused relationship. */
   isRelationshipField(snapshot: TableSnapshot, fieldName: string): boolean {
     const relationship = this.relationships().find(({ id }) => id === this.selectedRelationshipId());
     if (!relationship) return false;
@@ -572,12 +612,14 @@ export class RelationshipDiagramComponent {
       || (relationship.referencedSchema === snapshot.schema && relationship.referencedTable === snapshot.name && relationship.referencedFieldNames.includes(fieldName));
   }
 
+  /** Returns the primary, unique, and foreign-key roles shown beside a field. */
   fieldKeyKinds(snapshot: TableSnapshot, fieldName: string): string[] {
     return snapshot.constraints
       .filter(({ kind, fieldNames }) => ['primaryKey', 'unique'].includes(kind) && fieldNames.includes(fieldName))
       .map(({ kind }) => kind === 'primaryKey' ? 'PK' : 'UNIQUE');
   }
 
+  /** Loads table metadata in bounded batches and records partial-load information. */
   private async loadSnapshots(connection: ConnectResponse, resources: ResourceDescriptor[]): Promise<void> {
     const requestId = ++this.snapshotRequestId;
     const tables = resources.filter(({ kind }) => kind === 'table' || kind === 'partitionedTable');
@@ -620,6 +662,7 @@ export class RelationshipDiagramComponent {
     }
   }
 
+  /** Refreshes compatible target key sets for the relationship currently being edited. */
   private async loadFieldSets(): Promise<void> {
     const requestId = ++this.fieldSetRequestId;
     const connection = this.connections.activeConnection();
@@ -662,6 +705,7 @@ export class RelationshipDiagramComponent {
     }
   }
 
+  /** Combines persisted constraints with staged runbook additions and removals. */
   private collectRelationships(): DiagramRelationship[] {
     const snapshots = this.snapshots();
     const current = this.runbook.runbook();
@@ -694,6 +738,7 @@ export class RelationshipDiagramComponent {
       || left.sourceTable.localeCompare(right.sourceTable) || left.name.localeCompare(right.name));
   }
 
+  /** Converts a foreign-key constraint descriptor into diagram edge data. */
   private toRelationship(snapshot: TableSnapshot, constraint: TableConstraintDescriptor, pending: boolean): DiagramRelationship {
     return {
       id: this.relationshipKey(snapshot.schema, snapshot.name, constraint.name),
@@ -709,6 +754,7 @@ export class RelationshipDiagramComponent {
     };
   }
 
+  /** Finds original constraints that must be dropped when a staged key replaces them. */
   private pendingOriginalDrops(source: TableSnapshot, pendingName: string): Extract<SchemaOperation, { kind: 'dropConstraint' }>[] {
     const current = this.runbook.runbook();
     if (!current || this.tableKey(current.schema, current.table) !== this.tableKey(source.schema, source.name)) return [];
@@ -720,10 +766,12 @@ export class RelationshipDiagramComponent {
     return candidates.length === 1 ? candidates : [];
   }
 
+  /** Builds a stable key for a table node and its measured field anchors. */
   private tableKey(schema: string, table: string): string {
     return JSON.stringify([schema, table]);
   }
 
+  /** Builds a stable key for one named table constraint edge. */
   private relationshipKey(schema: string, table: string, name: string): string {
     return JSON.stringify([schema, table, name]);
   }

@@ -1,6 +1,6 @@
 import '@angular/compiler';
 import 'fake-indexeddb/auto';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PostgresConnectRequest } from '@querydock/contracts';
 import { ConnectionVaultService } from '../src/app/feature/workspace/connections/connection-vault.service';
 
@@ -17,6 +17,8 @@ const profileConfiguration: PostgresConnectRequest = {
   password: 'secret',
   sslMode: 'require',
 };
+
+beforeEach(async () => clearVaultRecords());
 
 describe('ConnectionVaultService named profiles', () => {
   it('saves and renames encrypted names, restores them after reload, and reads legacy unnamed profiles', async () => {
@@ -42,6 +44,29 @@ describe('ConnectionVaultService named profiles', () => {
     expect(restored.profiles().find(({ configuration }) => configuration.database === 'querydock')?.name)
       .toBe('Production analytics');
     expect(restored.profiles().find(({ configuration }) => configuration.database === 'legacy')?.name).toBe('');
+  });
+
+  it('enforces password and profile rules, rejects a wrong password, and supports forget, lock, and reset', async () => {
+    const vault = new ConnectionVaultService();
+    await vi.waitFor(() => expect(vault.status()).toBe('unconfigured'));
+    await expect(vault.create('too short')).rejects.toThrow('at least 12 characters');
+    await expect(vault.save(profileConfiguration)).rejects.toThrow('Unlock the connection vault first');
+    await vault.create(password);
+    await expect(vault.save(profileConfiguration, 'x'.repeat(81))).rejects.toThrow('80 characters or fewer');
+    await vault.save(profileConfiguration, 'Read only');
+    const profileId = vault.profiles()[0]!.id;
+
+    vault.lock();
+    expect(vault.status()).toBe('locked');
+    expect(vault.profiles()).toEqual([]);
+    await expect(vault.unlock('incorrect password')).rejects.toThrow('password is incorrect');
+    expect(vault.status()).toBe('locked');
+    await vault.unlock(password);
+    expect(vault.profiles()).toHaveLength(1);
+    await vault.forget(profileId);
+    expect(vault.profiles()).toEqual([]);
+    await vault.reset();
+    expect(vault.status()).toBe('unconfigured');
   });
 });
 
@@ -85,9 +110,22 @@ async function insertLegacyUnnamedProfile(configuration: PostgresConnectRequest,
 function openVaultDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(databaseName, 1);
+    request.onupgradeneeded = () => request.result.createObjectStore(storeName, { keyPath: 'id' });
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
+}
+
+async function clearVaultRecords(): Promise<void> {
+  const database = await openVaultDatabase();
+  await new Promise<void>((resolve, reject) => {
+    const transaction = database.transaction(storeName, 'readwrite');
+    transaction.objectStore(storeName).clear();
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error);
+  });
+  database.close();
 }
 
 function readMetadata(database: IDBDatabase): Promise<{ salt: string; iterations: number }> {

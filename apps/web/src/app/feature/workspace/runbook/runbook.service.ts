@@ -64,6 +64,7 @@ export class RunbookService {
   readonly appliedStatements = computed(() => this.runbook()?.appliedBatches.flatMap(({ statements }) => statements) ?? []);
   readonly ready = this.restore();
 
+  /** Replaces or removes a staged field operation using a fresh server preview. */
   async stageSchemaFieldDraft(
     connection: ConnectResponse,
     snapshot: TableSnapshot,
@@ -130,6 +131,7 @@ export class RunbookService {
     }
   }
 
+  /** Adds or updates a new table draft in the active database runbook. */
   async stageCreateTable(
     connection: ConnectResponse,
     schema: string,
@@ -188,6 +190,7 @@ export class RunbookService {
     }
   }
 
+  /** Stages or removes one table constraint while retaining other staged constraints. */
   async stageSchemaOperation(
     connection: ConnectResponse,
     snapshot: TableSnapshot,
@@ -197,6 +200,7 @@ export class RunbookService {
     await this.stageSchemaOperations(connection, snapshot, operation ? [operation] : [], [replacementName]);
   }
 
+  /** Stages a table rename or drop as an isolated lifecycle batch. */
   async stageTableOperation(
     connection: ConnectResponse,
     snapshot: TableSnapshot,
@@ -235,6 +239,7 @@ export class RunbookService {
     }
   }
 
+  /** Removes a closed new-table draft and refreshes preview SQL for remaining drafts. */
   async discardCreateTableDraft(draftId: string, tableName: string): Promise<void> {
     await this.ready;
     const entry = [...this.runbooksByConnection().entries()].find(([, runbook]) =>
@@ -271,6 +276,7 @@ export class RunbookService {
     await this.persist(updated);
   }
 
+  /** Replaces selected constraint operations after validating the updated batch on the server. */
   async stageSchemaOperations(
     connection: ConnectResponse,
     snapshot: TableSnapshot,
@@ -332,6 +338,7 @@ export class RunbookService {
     }
   }
 
+  /** Applies exactly the reviewed preview and records the confirmed statements as history. */
   async applyPending(acknowledgedWarnings: string[] = []): Promise<void> {
     await this.ready;
     const current = this.runbook();
@@ -386,6 +393,7 @@ export class RunbookService {
     }
   }
 
+  /** Discards pending operations and refreshes the baseline when the database is reachable. */
   async discardPending(): Promise<void> {
     await this.ready;
     const current = this.runbook();
@@ -405,6 +413,7 @@ export class RunbookService {
     await this.persist(updated);
   }
 
+  /** Reconciles an uncertain apply result by inspecting the actual database state. */
   async resolveUnknownApply(outcome: 'applied' | 'notApplied'): Promise<void> {
     await this.ready;
     if (this.reconciling()) return;
@@ -420,6 +429,7 @@ export class RunbookService {
     }
   }
 
+  /** Reconciles schema changes, table lifecycle actions, and create batches separately. */
   private async reconcileUnknownApply(outcome: 'applied' | 'notApplied'): Promise<void> {
     const current = this.runbook();
     if (!current?.applyOutcomeUnknown || !current.preview) return;
@@ -546,6 +556,7 @@ export class RunbookService {
     await this.persist(updated);
   }
 
+  /** Checks a table's existence while treating only API 404 responses as absence. */
   private async inspectMaybe(connectionId: string, schema: string, table: string): Promise<TableSnapshot | null> {
     try { return await this.connections.inspectTable(connectionId, schema, table); }
     catch (error) {
@@ -554,6 +565,7 @@ export class RunbookService {
     }
   }
 
+  /** Deletes the active connection's saved runbook unless an apply result is uncertain. */
   async clearRunbook(): Promise<void> {
     await this.ready;
     if (this.runbook()?.applyOutcomeUnknown) {
@@ -572,10 +584,12 @@ export class RunbookService {
     }
   }
 
+  /** Sets the user-visible error notice from an unknown failure value. */
   reportError(error: unknown): void {
     this.error.set(messageOf(error));
   }
 
+  /** Downloads SQL confirmed by earlier applies as a local .sql file. */
   async exportAppliedSql(): Promise<void> {
     const statements = this.appliedStatements();
     if (!statements.length || this.runbook()?.applyOutcomeUnknown) return;
@@ -590,10 +604,12 @@ export class RunbookService {
     setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 
+  /** Finds the runbook held for a database target, independent of the active workspace tab. */
   private runbookForTarget(target: ConnectionTarget): SchemaRunbook | null {
     return this.runbooksByConnection().get(runbookKey(target)) ?? null;
   }
 
+  /** Updates one target's runbook without mutating the signal's existing map. */
   private setRunbookForTarget(target: ConnectionTarget, runbook: SchemaRunbook | null): void {
     this.runbooksByConnection.update((current) => {
       const next = new Map(current);
@@ -604,10 +620,12 @@ export class RunbookService {
     });
   }
 
+  /** Resolves a currently connected database whose target matches the saved runbook. */
   private matchingConnection(target: ConnectionTarget): ConnectResponse | undefined {
     return this.connections.connections().find((connection) => sameTarget(connection.target, target));
   }
 
+  /** Restores stored runbooks, migrates the legacy active record, and marks storage availability. */
   private async restore(): Promise<void> {
     try {
       const database = await this.openDatabase();
@@ -656,6 +674,7 @@ export class RunbookService {
     }
   }
 
+  /** Persists a runbook by stable database-target key and marks storage availability. */
   private async persist(runbook: SchemaRunbook): Promise<void> {
     try {
       const database = await this.openDatabase();
@@ -666,6 +685,7 @@ export class RunbookService {
     }
   }
 
+  /** Opens the runbook object store and reuses its connection for this service lifetime. */
   private openDatabase(): Promise<IDBDatabase> {
     if (!this.databasePromise) {
       this.databasePromise = new Promise((resolve, reject) => {
@@ -685,6 +705,7 @@ export class RunbookService {
   }
 }
 
+/** Builds a stable IndexedDB key from database identity without including credentials. */
 function runbookKey(target: ConnectionTarget): string {
   return `connection:${encodeURIComponent(JSON.stringify([
     target.adapter,
@@ -695,11 +716,13 @@ function runbookKey(target: ConnectionTarget): string {
   ]))}`;
 }
 
+/** Compares target identity while deliberately excluding the password. */
 function sameTarget(left: ConnectionTarget, right: ConnectionTarget): boolean {
   return left.adapter === right.adapter && left.host === right.host && left.port === right.port
     && left.database === right.database && left.username === right.username;
 }
 
+/** Checks whether pending operations belong to the same connected table. */
 function sameRunbookResource(
   runbook: SchemaRunbook,
   target: ConnectionTarget,
@@ -709,11 +732,13 @@ function sameRunbookResource(
   return sameTarget(runbook.target, target) && runbook.schema === schema && runbook.table === table;
 }
 
+/** Matches a create operation by stable draft ID, with legacy table-name fallback. */
 function matchesCreateTableDraft(operation: SchemaOperation, draftId: string, tableName: string): boolean {
   return operation.kind === 'createTable'
     && (operation.draftId === draftId || (!operation.draftId && operation.table === tableName));
 }
 
+/** Fills fields introduced after the legacy runbook format was stored. */
 function normalizeRunbook(runbook: SchemaRunbook): SchemaRunbook {
   return {
     ...runbook,
@@ -729,14 +754,17 @@ function normalizeRunbook(runbook: SchemaRunbook): SchemaRunbook {
   };
 }
 
+/** Converts errors into a stable message for the runbook notice area. */
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : 'The runbook request failed.';
 }
 
+/** Keeps the pending batch marked uncertain when a failure cannot prove rollback. */
 function isUncertainApplyError(error: unknown): boolean {
   return !(error instanceof ApiRequestError) || error.status === null || error.status >= 500;
 }
 
+/** Checks whether an observed field matches a staged field operation. */
 function operationMatchesField(
   field: TableSnapshot['fields'][number],
   operation: Extract<SchemaOperation, { kind: 'addNullableField' | 'alterField' }>,
@@ -755,6 +783,7 @@ function operationMatchesField(
     && nullableMatches && identityMatches;
 }
 
+/** Checks whether live metadata proves that one staged schema operation was applied. */
 function operationMatchesSnapshot(snapshot: TableSnapshot, operation: SchemaOperation): boolean {
   if (operation.kind === 'createTable') {
     return snapshot.name === operation.table && (operation.ifNotExists || snapshot.fields.length === operation.fields.length
@@ -791,6 +820,7 @@ function operationMatchesSnapshot(snapshot: TableSnapshot, operation: SchemaOper
     && constraint.referencedFieldNames.every((name, index) => name === operation.referencedFieldNames[index]);
 }
 
+/** Compares a created table field's type, size, default, nullability, and identity. */
 function createdFieldMatches(
   field: TableSnapshot['fields'][number],
   expected: Extract<SchemaOperation, { kind: 'createTable' }>['fields'][number],
@@ -815,6 +845,7 @@ function createdFieldMatches(
     && (field.identityGeneration ?? null) === expected.identityGeneration;
 }
 
+/** Converts an IndexedDB request into a Promise for restoration workflows. */
 function requestResult<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
     request.onsuccess = () => resolve(request.result);
@@ -822,6 +853,7 @@ function requestResult<T>(request: IDBRequest<T>): Promise<T> {
   });
 }
 
+/** Resolves an object-store operation only after its IndexedDB transaction commits. */
 function transactionRequest<T>(
   database: IDBDatabase,
   requestFactory: (store: IDBObjectStore) => IDBRequest<T>,

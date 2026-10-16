@@ -18,6 +18,7 @@ import type {
 import { tableDataQueryResponseSchema } from '@querydock/contracts';
 
 export class ApiRequestError extends Error {
+  /** Retains the HTTP status while exposing the server's safe user-facing message. */
   constructor(message: string, readonly status: number | null) {
     super(message);
     this.name = 'ApiRequestError';
@@ -56,21 +57,25 @@ export class ConnectionApiService {
     void this.restoreSessionConnections();
   }
 
+  /** Opens the connection dialog and clears its previous request error. */
   openConnectDialog(): void {
     this.connectError.set(null);
     this.connectDialogOpen.set(true);
   }
 
+  /** Closes the dialog unless a connection request is still running. */
   closeConnectDialog(): void {
     if (!this.connecting()) this.connectDialogOpen.set(false);
   }
 
+  /** Selects a connection only when it belongs to the restored session. */
   selectConnection(connectionId: string): void {
     if (this.connections().some((connection) => connection.connectionId === connectionId)) {
       this.activeConnectionId.set(connectionId);
     }
   }
 
+  /** Creates a server session connection, activates it, and loads its visible resources. */
   async connect(configuration: PostgresConnectRequest, closeOnSuccess = true): Promise<boolean> {
     this.connectError.set(null);
     this.connecting.set(true);
@@ -97,6 +102,7 @@ export class ConnectionApiService {
     }
   }
 
+  /** Disconnects from the server and removes all client state for that connection. */
   async disconnect(connectionId: string): Promise<boolean> {
     this.disconnectError.set(null);
     this.disconnectingId.set(connectionId);
@@ -125,6 +131,7 @@ export class ConnectionApiService {
     }
   }
 
+  /** Loads one table's schema snapshot for the active workspace feature. */
   async inspectTable(connectionId: string, schema: string, table: string): Promise<TableSnapshot> {
     const params = new URLSearchParams({ schema, table });
     return request<TableSnapshot>(
@@ -132,6 +139,7 @@ export class ConnectionApiService {
     );
   }
 
+  /** Requests a page of table rows and validates the server response against the contract. */
   queryTableData(
     connectionId: string,
     schema: string,
@@ -149,12 +157,14 @@ export class ConnectionApiService {
     });
   }
 
+  /** Retrieves field type choices supplied by the connected database adapter. */
   async editableFieldTypes(connectionId: string): Promise<EditableFieldTypeDescriptor[]> {
     return request<EditableFieldTypeDescriptor[]>(
       `/api/connections/${encodeURIComponent(connectionId)}/schema/field-types`,
     );
   }
 
+  /** Requests target key options compatible with the chosen local foreign-key fields. */
   foreignKeyFieldChoices(
     connectionId: string,
     schema: string,
@@ -171,6 +181,7 @@ export class ConnectionApiService {
     });
   }
 
+  /** Requests a server-generated migration preview for the staged operations. */
   previewMigration(connectionId: string, plan: MigrationPreviewRequest): Promise<MigrationPreviewResponse> {
     return request<unknown>(`/api/connections/${encodeURIComponent(connectionId)}/migrations/preview`, {
       method: 'POST',
@@ -178,6 +189,7 @@ export class ConnectionApiService {
     }).then(parseMigrationPreview);
   }
 
+  /** Previews one field editor draft and validates the returned operation list. */
   previewSchemaFieldDraft(connectionId: string, draft: SchemaFieldDraftRequest): Promise<SchemaFieldDraftResponse> {
     return request<unknown>(`/api/connections/${encodeURIComponent(connectionId)}/migrations/field-draft`, {
       method: 'POST',
@@ -191,6 +203,7 @@ export class ConnectionApiService {
     });
   }
 
+  /** Applies the reviewed SQL and validates the server's confirmation snapshots. */
   applyMigration(connectionId: string, plan: MigrationApplyRequest): Promise<MigrationApplyResponse> {
     return request<unknown>(`/api/connections/${encodeURIComponent(connectionId)}/migrations/apply`, {
       method: 'POST',
@@ -198,6 +211,7 @@ export class ConnectionApiService {
     }).then(parseMigrationApply);
   }
 
+  /** Restores the server session after reload and refreshes resources for every connection. */
   private async restoreSessionConnections(): Promise<void> {
     try {
       const connections = await request<ConnectResponse[]>('/api/connections');
@@ -216,6 +230,7 @@ export class ConnectionApiService {
     }
   }
 
+  /** Replaces the cached resources for a connection and clears its previous load error. */
   private async loadResources(connectionId: string): Promise<void> {
     const resources = await request<ResourceDescriptor[]>(
       `/api/connections/${encodeURIComponent(connectionId)}/resources`,
@@ -232,10 +247,12 @@ export class ConnectionApiService {
     });
   }
 
+  /** Refreshes a connection's resource cache after a schema change. */
   refreshResources(connectionId: string): Promise<void> {
     return this.loadResources(connectionId);
   }
 
+  /** Stores a resource-load failure without discarding the last known connection. */
   private setResourceError(connectionId: string, message: string): void {
     this.resourceErrorsByConnection.update((current) => {
       const next = new Map(current);
@@ -245,12 +262,14 @@ export class ConnectionApiService {
   }
 }
 
+/** Converts thrown values into stable messages suitable for workspace notices. */
 function errorMessage(error: unknown): string {
   return error instanceof Error
     ? error.message
     : 'Unable to connect. Check that the QueryDock server is running and try again.';
 }
 
+/** Sends same-origin API requests and translates network/HTTP failures to ApiRequestError. */
 async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
   let response: Response;
   try {
@@ -275,6 +294,7 @@ async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
   return payload as T;
 }
 
+/** Checks migration preview payload shape before passing it into workspace state. */
 function parseMigrationPreview(payload: unknown): MigrationPreviewResponse {
   if (isRecord(payload)
     && (typeof payload['baselineFingerprint'] === 'string' || payload['baselineFingerprint'] === null)
@@ -285,6 +305,7 @@ function parseMigrationPreview(payload: unknown): MigrationPreviewResponse {
   throw new Error('The server returned an invalid migration preview.');
 }
 
+/** Requires the server to confirm applied SQL and at least one valid table snapshot. */
 function parseMigrationApply(payload: unknown): MigrationApplyResponse {
   const snapshots = isRecord(payload) ? payload['snapshots'] : undefined;
   if (isRecord(payload)
@@ -302,6 +323,7 @@ function parseMigrationApply(payload: unknown): MigrationApplyResponse {
   throw new Error('The server did not return a valid confirmation for the migration.');
 }
 
+/** Narrows unknown JSON payloads to object records for response validation. */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }

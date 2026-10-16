@@ -15,6 +15,7 @@ export class ConfirmationDialogHostComponent {
   private returnFocusTo: HTMLElement | null = null;
   private activeRequest: object | null = null;
 
+  /** Moves focus into each dialog and restores focus after the request resolves. */
   constructor() {
     effect(() => {
       const request = this.confirmation.request();
@@ -31,14 +32,17 @@ export class ConfirmationDialogHostComponent {
     });
   }
 
+  /** Resolves the current prompt as cancelled. */
   cancel(): void {
     this.confirmation.resolve(false);
   }
 
+  /** Resolves the current prompt as confirmed. */
   confirm(): void {
     this.confirmation.resolve(true);
   }
 
+  /** Handles Escape and traps Tab navigation within the two dialog actions. */
   handleKeydown(event: KeyboardEvent): void {
     if (event.key === 'Escape') {
       event.preventDefault();

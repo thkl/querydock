@@ -81,6 +81,7 @@ export class SqlEditorComponent implements AfterViewInit, OnChanges, OnDestroy {
 
   private editor?: EditorView;
 
+  /** Creates CodeMirror after the editor host exists in the rendered view. */
   ngAfterViewInit(): void {
     this.editor = new EditorView({
       state: EditorState.create({
@@ -108,6 +109,7 @@ export class SqlEditorComponent implements AfterViewInit, OnChanges, OnDestroy {
     });
   }
 
+  /** Synchronizes external SQL changes and editor options into CodeMirror state. */
   ngOnChanges(changes: SimpleChanges): void {
     if (!this.editor) return;
 
@@ -122,6 +124,7 @@ export class SqlEditorComponent implements AfterViewInit, OnChanges, OnDestroy {
     }
   }
 
+  /** Destroys the CodeMirror view and releases editor event handlers. */
   ngOnDestroy(): void {
     this.editor?.destroy();
   }

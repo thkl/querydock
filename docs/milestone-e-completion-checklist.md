@@ -31,6 +31,7 @@ Use this checklist to decide whether the relationship diagram, connection workfl
 
 ## Data browsing and editing
 
+- [x] **[MANUAL]** Review the data browser grid presentation and controls; the user customized the grid and confirmed the browser UI is satisfactory.
 - [x] **[MANUAL]** Confirm table structure and data actions appear on row hover, remain keyboard reachable, and stay visible on touch devices. The user confirmed this behavior.
 - [ ] **[MANUAL]** Open a table’s Browse data page from its structure view. Confirm it gets a connection-scoped workspace tab, returns to the same table after switching tabs, and re-registers when its route is loaded directly after session restore.
 - [ ] **[MANUAL]** Browse a small and large table. Confirm results are bounded, paging is server-side, filtering/sorting is server-side and stable, refresh reflects external changes, and query controls do not send unbounded requests.

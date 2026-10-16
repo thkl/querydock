@@ -22,17 +22,20 @@ export class ConnectionDialogComponent {
   readonly editingProfileId = signal<string | null>(null);
   readonly editingProfileName = signal('');
 
+  /** Closes the dialog through the connection service unless a request is active. */
   closeDialog(): void {
     this.saveToVault.set(false);
     this.state.closeConnectDialog();
   }
 
+  /** Locks the local connection vault and clears its selection state from the form. */
   lockVault(): void {
     this.vault.lock();
     this.saveToVault.set(false);
     this.vaultMessage.set(null);
   }
 
+  /** Creates the encrypted vault after matching both password fields. */
   async createVault(event: SubmitEvent): Promise<void> {
     event.preventDefault();
     const form = event.currentTarget;
@@ -54,6 +57,7 @@ export class ConnectionDialogComponent {
     }
   }
 
+  /** Unlocks the vault from the submitted password and reports a safe failure notice. */
   async unlockVault(event: SubmitEvent): Promise<void> {
     event.preventDefault();
     const form = event.currentTarget;
@@ -69,6 +73,7 @@ export class ConnectionDialogComponent {
     }
   }
 
+  /** Validates form values, connects, and optionally stores the credentials in the vault. */
   async submit(event: SubmitEvent): Promise<void> {
     event.preventDefault();
     const form = event.currentTarget;
@@ -102,10 +107,12 @@ export class ConnectionDialogComponent {
     this.saveToVault.set(false);
   }
 
+  /** Mirrors the save-to-vault checkbox into the form signal. */
   updateSaveToVault(event: Event): void {
     this.saveToVault.set((event.currentTarget as HTMLInputElement).checked);
   }
 
+  /** Retries saving credentials after a successful connection but failed vault write. */
   async retryVaultSave(): Promise<void> {
     const pending = this.pendingVaultSave();
     if (!pending) return;
@@ -120,11 +127,13 @@ export class ConnectionDialogComponent {
     }
   }
 
+  /** Connects with the selected decrypted profile. */
   async connectSaved(profile: SavedConnectionProfile): Promise<void> {
     this.vaultMessage.set(null);
     await this.state.connect(profile.configuration);
   }
 
+  /** Requires a second click before removing a saved profile from browser storage. */
   async forgetProfile(profile: SavedConnectionProfile): Promise<void> {
     if (this.forgettingProfileId() !== profile.id) {
       this.forgettingProfileId.set(profile.id);
@@ -139,11 +148,13 @@ export class ConnectionDialogComponent {
     }
   }
 
+  /** Opens the inline name editor for one saved profile. */
   startRenameProfile(profile: SavedConnectionProfile): void {
     this.editingProfileId.set(profile.id);
     this.editingProfileName.set(profile.name);
   }
 
+  /** Persists an edited profile name through the encrypted vault service. */
   async saveProfileName(profile: SavedConnectionProfile): Promise<void> {
     try {
       await this.vault.save(profile.configuration, this.editingProfileName());
@@ -154,6 +165,7 @@ export class ConnectionDialogComponent {
     }
   }
 
+  /** Requires confirmation before deleting all encrypted vault records. */
   async resetVault(): Promise<void> {
     if (!this.resetVaultArmed()) {
       this.resetVaultArmed.set(true);
@@ -169,6 +181,7 @@ export class ConnectionDialogComponent {
     }
   }
 
+  /** Formats named profiles or falls back to their database target details. */
   profileLabel(profile: SavedConnectionProfile): string {
     if (profile.name.trim()) return profile.name.trim();
     const { configuration } = profile;

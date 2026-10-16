@@ -31,6 +31,7 @@ export class ForeignKeyReferenceCellComponent {
   readonly row = computed(() => this.context.row() as unknown as ForeignKeyEditorRow);
   readonly isForeignKey = computed(() => ['foreignKey', 'Foreign key'].includes(this.row().kind));
 
+  /** Opens the referenced-constraint sidebar for the current grid row. */
   open(event: MouseEvent): void {
     event.stopPropagation();
     this.editor.open(this.row());

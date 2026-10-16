@@ -218,6 +218,7 @@ export class TableSchemaComponent {
   readonly foreignKeyEditorError = signal<string | null>(null);
   private initializedForeignKeyRow: ForeignKeyEditorRow | null = null;
 
+  /** Loads the requested table, initializes editable grids, and restores runbook state. */
   constructor() {
     const columns = this.makeFieldColumns();
     this.editableFieldGridProvider = new AgridProvider<SchemaFieldRow>({
@@ -332,6 +333,7 @@ export class TableSchemaComponent {
     });
   }
 
+  /** Initializes a new field row with adapter-provided defaults before editing. */
   prepareFieldDraft(event: NewRecord<SchemaFieldRow>): void {
     const dataType = this.snapshot()?.editableFieldTypes[0]?.value ?? '';
     event.datasource.updateRow(event.index, {
@@ -354,6 +356,7 @@ export class TableSchemaComponent {
     this.stageError.set(null);
   }
 
+  /** Opens the inline table rename editor using the current table name. */
   beginTableRename(): void {
     const table = this.snapshot();
     if (!table?.canAlter) return;
@@ -362,6 +365,7 @@ export class TableSchemaComponent {
     this.stageError.set(null);
   }
 
+  /** Stages a table rename as a separate runbook lifecycle operation. */
   async stageTableRename(): Promise<void> {
     const table = this.snapshot();
     const connection = this.connections.activeConnection();
@@ -379,6 +383,7 @@ export class TableSchemaComponent {
     }
   }
 
+  /** Stages a table drop after a user-facing warning confirmation. */
   async stageTableDrop(): Promise<void> {
     const table = this.snapshot();
     const connection = this.connections.activeConnection();
@@ -394,6 +399,7 @@ export class TableSchemaComponent {
     }
   }
 
+  /** Discards a pending rename/drop operation and reloads its source snapshot. */
   async cancelTableOperation(): Promise<void> {
     try {
       await this.runbook.discardPending();
@@ -403,6 +409,7 @@ export class TableSchemaComponent {
     }
   }
 
+  /** Opens the table's read-only data browser in a workspace page. */
   openDataView(): void {
     const connection = this.connections.activeConnection();
     const table = this.snapshot();
@@ -411,6 +418,7 @@ export class TableSchemaComponent {
     }
   }
 
+  /** Prepares a constraint row with stable draft metadata for grid editing. */
   prepareConstraintDraft(event: NewRecord<SchemaConstraintRow>): void {
     const firstKind = this.snapshot()?.editableConstraintKinds[0]?.value ?? 'unique';
     event.datasource.updateRow(event.index, {
@@ -431,6 +439,7 @@ export class TableSchemaComponent {
     this.stageError.set(null);
   }
 
+  /** Applies one field-cell edit to the local row while retaining staged changes. */
   onFieldCellEdit(event: GridEditEvent<SchemaFieldRow>): void {
     if (!['name', 'dataType', 'typeDetails', 'defaultValue', 'nullable', 'identityGeneration'].includes(event.field)) return;
     const row = this.fieldDatasource.rows()[event.position.rowIndex];
@@ -451,6 +460,7 @@ export class TableSchemaComponent {
     });
   }
 
+  /** Converts a completed field row edit into an adapter previewed runbook draft. */
   onFieldRecordEdit(event: RecordEditEvent<SchemaFieldRow>): void {
     const row = event.data;
     if (!row.isGridInput && !row.isUncommitted && !row.editedFields.length) return;
@@ -459,6 +469,7 @@ export class TableSchemaComponent {
     if (!this.processingFieldDrafts) void this.flushFieldDrafts();
   }
 
+  /** Applies one constraint-cell edit and synchronizes the foreign-key sidebar. */
   onConstraintCellEdit(event: GridEditEvent<SchemaConstraintRow>): void {
     if (!['kind', 'name', 'fields'].includes(event.field)) return;
     const row = this.constraintDatasource.rows()[event.position.rowIndex];
@@ -474,6 +485,7 @@ export class TableSchemaComponent {
     }
   }
 
+  /** Stages a completed constraint row or reports why it is not ready. */
   onConstraintRecordEdit(event: RecordEditEvent<SchemaConstraintRow>): void {
     const row = event.data;
     if (row.isGridInput) {
@@ -487,6 +499,7 @@ export class TableSchemaComponent {
     }
   }
 
+  /** Turns removal of an existing grid row into a staged constraint-drop operation. */
   onConstraintRowRemoved(event: RecordEditEvent<SchemaConstraintRow>): void {
     const row = event.data;
     this.closeForeignKeyEditorFor(row);
@@ -518,6 +531,7 @@ export class TableSchemaComponent {
       .finally(() => this.constraintDatasource.setData(this.displayConstraints()));
   }
 
+  /** Closes the reference sidebar when its constraint is removed or changed away. */
   private closeForeignKeyEditorFor(row: SchemaConstraintRow): void {
     const editing = this.foreignKeyEditor.row();
     if (!editing) return;
@@ -528,6 +542,7 @@ export class TableSchemaComponent {
     if (matches) this.foreignKeyEditor.close();
   }
 
+  /** Validates and previews a primary, unique, check, or foreign-key constraint draft. */
   private async stageConstraint(row: SchemaConstraintRow): Promise<void> {
     const connection = this.connections.activeConnection();
     const snapshot = this.snapshot();
@@ -600,12 +615,14 @@ export class TableSchemaComponent {
     }
   }
 
+  /** Updates the transient status cell for a constraint draft. */
   private setConstraintDraftStatus(row: SchemaConstraintRow, status: string): void {
     const rowIndex = this.constraintDatasource.rows().findIndex((candidate) =>
       candidate.isGridInput && candidate.name === row.name && candidate.fields === row.fields);
     if (rowIndex >= 0) this.constraintDatasource.patchRow(rowIndex, { status });
   }
 
+  /** Persists pending row edits before a schema refresh or navigation. */
   private async flushFieldDrafts(): Promise<void> {
     if (this.processingFieldDrafts) return;
     this.processingFieldDrafts = true;
@@ -621,6 +638,7 @@ export class TableSchemaComponent {
     }
   }
 
+  /** Sends the edited field through the server draft-preview endpoint. */
   private async stageGridField(row: SchemaFieldRow): Promise<void> {
     const connection = this.connections.activeConnection();
     const snapshot = this.snapshot();
@@ -645,6 +663,7 @@ export class TableSchemaComponent {
     }
   }
 
+  /** Defines editable field columns and their adapter-aware grid renderers. */
   private makeFieldColumns(): ColDef<SchemaFieldRow>[] {
     return [
       {
@@ -675,6 +694,7 @@ export class TableSchemaComponent {
     ];
   }
 
+  /** Defines constraint columns and the helper actions shown in the schema grid. */
   private makeConstraintColumns(): ColDef<SchemaConstraintRow>[] {
     return [
       {
@@ -694,6 +714,7 @@ export class TableSchemaComponent {
     ];
   }
 
+  /** Updates the selected referenced table and fetches its compatible key choices. */
   async onForeignKeyTargetChanged(event: Event): Promise<void> {
     const target = (event.target as HTMLSelectElement).value;
     const [schema = '', table = ''] = target.split('\u0000');
@@ -702,6 +723,7 @@ export class TableSchemaComponent {
     await this.loadForeignKeyTargetSets();
   }
 
+  /** Updates one selected source field and refreshes target compatibility results. */
   async onForeignKeyLocalFieldChanged(field: string, event: Event): Promise<void> {
     const checked = (event.target as HTMLInputElement).checked;
     const fields = this.foreignKeyLocalFields();
@@ -709,6 +731,7 @@ export class TableSchemaComponent {
     await this.loadForeignKeyTargetSets();
   }
 
+  /** Loads adapter-validated referenced key sets for the selected tables and fields. */
   async loadForeignKeyTargetSets(): Promise<void> {
     const row = this.foreignKeyEditor.row();
     const connection = this.connections.activeConnection();
@@ -742,6 +765,7 @@ export class TableSchemaComponent {
     }
   }
 
+  /** Restores target table and field selections when opening an existing foreign key. */
   private initializeForeignKeyEditor(row: ForeignKeyEditorRow): void {
     this.foreignKeyEditorError.set(null);
     this.foreignKeyEditorName.set(row.name);
@@ -760,6 +784,7 @@ export class TableSchemaComponent {
     });
   }
 
+  /** Saves the sidebar's selected referenced key as a staged foreign-key operation. */
   async saveForeignKeyReference(): Promise<void> {
     const row = this.foreignKeyEditor.row();
     const connection = this.connections.activeConnection();
@@ -793,15 +818,18 @@ export class TableSchemaComponent {
     }
   }
 
+  /** Canonicalizes a field type for identity-generation capability lookup. */
   private typeIdentity(snapshot: TableSnapshot, type: string): string {
     const descriptor = snapshot.editableFieldTypes.find((item) => item.value === type);
     return descriptor ? `${descriptor.typeSchema}.${descriptor.typeName}` : type;
   }
 
+  /** Checks whether the active adapter supports identity generation for a field type. */
   private identityGenerationAllowed(type: string): boolean {
     return this.snapshot()?.editableFieldTypes.find((item) => item.value === type)?.identityGenerationSupported ?? false;
   }
 
+  /** Merges baseline constraints with staged edits into grid display rows. */
   private toDisplayConstraints(): SchemaConstraintRow[] {
     const table = this.snapshot();
     if (!table) return [];
@@ -861,6 +889,7 @@ export class TableSchemaComponent {
     return rows;
   }
 
+  /** Checks whether a baseline constraint has a pending drop operation. */
   private isConstraintDropped(name: string | null): boolean {
     if (!name) return false;
     const pending = this.runbook.runbook();
@@ -872,6 +901,7 @@ export class TableSchemaComponent {
       operation.kind === 'dropConstraint' && operation.name === name);
   }
 
+  /** Formats adapter constraint kinds for the schema grid. */
   private constraintKindLabel(kind: TableConstraintDescriptor['kind']): string {
     return this.snapshot()?.editableConstraintKinds.find(({ value }) => value === kind)?.label ?? kind;
   }

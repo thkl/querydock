@@ -36,6 +36,7 @@ export class TableCreateComponent {
   readonly error = signal<string | null>(null);
   readonly submitting = signal(false);
 
+  /** Restores draft navigation, keeps tab state synchronized, and loads adapter field types. */
   constructor() {
     this.nextFieldId = Math.max(0, ...this.fields().map(({ id }) => id)) + 1;
     effect(() => this.pages.saveCreateTableDraft(this.workspacePage().id, {
@@ -76,18 +77,22 @@ export class TableCreateComponent {
     });
   }
 
+  /** Adds a blank field row to the new-table draft. */
   addField(): void {
     this.fields.update((fields) => [...fields, this.newField()]);
   }
 
+  /** Removes a field row while keeping at least one editable row in the draft. */
   removeField(id: number): void {
     this.fields.update((fields) => fields.length > 1 ? fields.filter((field) => field.id !== id) : fields);
   }
 
+  /** Checks whether the connected adapter supports identity generation for a type. */
   supportsIdentity(type: string): boolean {
     return this.typeOptions().find((item) => item.value === type)?.identityGenerationSupported ?? false;
   }
 
+  /** Updates one field property and clears identity values unsupported by its new type. */
   updateField(id: number, property: CreateFieldValue, value: string | boolean): void {
     this.fields.update((fields) => fields.map((field) => {
       if (field.id !== id) return field;
@@ -105,6 +110,7 @@ export class TableCreateComponent {
     }));
   }
 
+  /** Converts the draft into a server-previewed runbook operation. */
   async stage(): Promise<void> {
     this.error.set(null);
     const connection = this.connections.activeConnection();
@@ -136,6 +142,7 @@ export class TableCreateComponent {
     }
   }
 
+  /** Allocates a new field row with safe empty defaults. */
   private newField(): CreateFieldRow {
     return {
       id: this.nextFieldId++,

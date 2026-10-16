@@ -91,6 +91,7 @@ export interface VerifiedPostgresConnection {
 }
 
 export class PostgresConnectionError extends Error {
+  /** Creates a driver error paired with a user-safe explanation for API responses. */
   constructor(
     message: string,
     readonly safeMessage: string,
@@ -101,6 +102,7 @@ export class PostgresConnectionError extends Error {
 }
 
 export class MigrationPlanError extends Error {
+  /** Creates a classified migration failure for consistent controller status mapping. */
   constructor(
     readonly kind: 'not-found' | 'drift' | 'review-mismatch' | 'invalid' | 'unknown',
     message: string,
@@ -113,14 +115,17 @@ export class MigrationPlanError extends Error {
 export class PostgresAdapter {
   private readonly logger = new Logger(PostgresAdapter.name);
 
+  /** Reports schema features supported by PostgreSQL for client capability discovery. */
   schemaCapabilities(): SchemaCapabilities {
     return { createTableIfNotExists: true };
   }
 
+  /** Returns a defensive copy of the PostgreSQL field types exposed to schema editors. */
   editableFieldTypes() {
     return [...POSTGRES_EDITABLE_FIELD_TYPES];
   }
 
+  /** Opens a short-lived client and retrieves the connected server version. */
   async verifyConnection(configuration: PostgresConnectRequest): Promise<VerifiedPostgresConnection> {
     return this.withClient(configuration, async (client) => {
       const result = await client.query<{ serverVersion: string }>(
@@ -130,6 +135,7 @@ export class PostgresAdapter {
     });
   }
 
+  /** Lists visible PostgreSQL tables, views, and related queryable resources. */
   async listResources(configuration: PostgresConnectRequest): Promise<ResourceDescriptor[]> {
     return this.withClient(configuration, async (client) => {
       const result = await client.query<ResourceRow>(`
@@ -160,6 +166,7 @@ export class PostgresAdapter {
     });
   }
 
+  /** Inspects one visible relation and computes its editable metadata fingerprint. */
   async inspectTable(
     configuration: PostgresConnectRequest,
     schema: string,
@@ -170,6 +177,7 @@ export class PostgresAdapter {
     return this.withClient(configuration, (client) => this.inspectTableWithClient(client, schema, table));
   }
 
+  /** Reads a bounded page in a read-only transaction using validated filters and sorting. */
   async queryTableData(
     configuration: PostgresConnectRequest,
     schema: string,
@@ -230,6 +238,7 @@ export class PostgresAdapter {
     });
   }
 
+  /** Lists unique target keys and explains whether each matches the selected local fields. */
   async foreignKeyFieldChoices(
     configuration: PostgresConnectRequest,
     sourceSchema: string,
@@ -289,6 +298,7 @@ export class PostgresAdapter {
     });
   }
 
+  /** Validates a migration against live metadata and returns SQL plus user warnings. */
   async previewMigration(
     configuration: PostgresConnectRequest,
     request: MigrationPreviewRequest,
@@ -340,6 +350,7 @@ export class PostgresAdapter {
     });
   }
 
+  /** Applies only statements matching the reviewed preview, atomically, then returns fresh snapshots. */
   async applyMigration(
     configuration: PostgresConnectRequest,
     request: MigrationApplyRequest,
@@ -451,6 +462,7 @@ export class PostgresAdapter {
     });
   }
 
+  /** Reads relation, column, constraint, and privilege metadata using an existing client. */
   private async inspectTableWithClient(
     client: Client,
     schema: string,
@@ -597,6 +609,7 @@ export class PostgresAdapter {
     };
   }
 
+  /** Resolves the current field-editor draft into operations, SQL, and warnings. */
   async previewSchemaFieldDraft(
     configuration: PostgresConnectRequest,
     request: SchemaFieldDraftRequest,
@@ -623,6 +636,7 @@ export class PostgresAdapter {
     });
   }
 
+  /** Owns one PostgreSQL client lifecycle and translates driver errors into safe typed errors. */
   private async withClient<T>(
     configuration: PostgresConnectRequest,
     action: (client: Client) => Promise<T>,
@@ -661,6 +675,7 @@ export class PostgresAdapter {
     }
   }
 
+  /** Blocks connections outside the optional normalized host allow list. */
   private assertDatabaseHostAllowed(host: string): void {
     const configuredHosts = process.env['QUERYDOCK_ALLOWED_DATABASE_HOSTS']?.trim();
     if (!configuredHosts) return;
@@ -677,6 +692,7 @@ export class PostgresAdapter {
   }
 }
 
+/** Canonicalizes host spelling for allow-list comparisons. */
 function normalizeDatabaseHost(host: string): string {
   const normalized = host.trim().toLowerCase();
   const unbracketed = normalized.startsWith('[') && normalized.endsWith(']')
@@ -685,6 +701,7 @@ function normalizeDatabaseHost(host: string): string {
   return unbracketed.replace(/\.$/, '');
 }
 
+/** Checks schema creation rights and whether a proposed table name is already occupied. */
 async function assertNewTableTarget(client: Client, schema: string, table: string, ifNotExists = false): Promise<void> {
   const schemaResult = await client.query<{ exists: boolean; canCreate: boolean }>(
     `SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = $1) AS "exists",
@@ -709,6 +726,7 @@ async function assertNewTableTarget(client: Client, schema: string, table: strin
   }
 }
 
+/** Builds warnings for create-table operations that may affect existing objects or data. */
 function createTableWarnings(schema: string, operations: SchemaOperation[]): string[] {
   const tableNames = operations.flatMap((operation) =>
     operation.kind === 'createTable' && operation.ifNotExists ? [operation.table] : []);
@@ -717,6 +735,7 @@ function createTableWarnings(schema: string, operations: SchemaOperation[]): str
 }
 
 /** @internal Pure SQL generation helper; exported for the migration-plan unit tests. */
+/** Generates a quoted PostgreSQL CREATE TABLE statement from adapter-validated field definitions. */
 export function createTableStatement(schema: string, table: string, fields: CreateTableField[], ifNotExists = false): string {
   validatePostgresIdentifier(schema, 'schema');
   validatePostgresIdentifier(table, 'table');
@@ -767,6 +786,7 @@ export function createTableStatement(schema: string, table: string, fields: Crea
   return `CREATE TABLE${clause} ${quoteIdentifier(schema)}.${quoteIdentifier(table)} (\n${definitions.join(',\n')}\n);`;
 }
 
+/** Confirms referenced keys exist and match local field types before staging a foreign key. */
 async function validateForeignKeyTargets(
   client: Client,
   source: TableSnapshot,
@@ -832,6 +852,7 @@ async function validateForeignKeyTargets(
   }
 }
 
+/** Reads a relation's primary and unique key field sets for foreign-key validation. */
 async function inspectForeignKeyTarget(
   client: Client,
   schema: string,
@@ -876,6 +897,7 @@ async function inspectForeignKeyTarget(
   };
 }
 
+/** Applies PostgreSQL adapter compatibility rules to a local/reference type pair. */
 function typesCanReference(localType: string, targetType: string): boolean {
   const normalize = (type: string) => type.toLowerCase().replace(/\([^)]*\)/g, '').trim();
   const canonical = (type: string) => ({
@@ -890,17 +912,20 @@ function typesCanReference(localType: string, targetType: string): boolean {
   return (integer.has(local) && integer.has(target)) || (text.has(local) && text.has(target));
 }
 
+/** Resolves a PostgreSQL catalog type to an editable type, or null when unsupported. */
 function fieldTypeFor(dataType: string): string | null {
   if (dataType === 'character varying') return 'varchar';
   if (dataType === 'timestamp with time zone') return 'timestamptz';
   return POSTGRES_EDITABLE_FIELD_TYPES.find((type) => type.value === dataType)?.value ?? null;
 }
 
+/** Reports whether PostgreSQL identity generation is supported for the given type. */
 function identityGenerationSupported(type: string): boolean {
   return POSTGRES_EDITABLE_FIELD_TYPES.find((descriptor) => descriptor.value === type)
     ?.identityGenerationSupported ?? false;
 }
 
+/** Converts editor values into a schema operation and validates type-specific options. */
 function normalizeFieldDraft(
   snapshot: TableSnapshot,
   draft: SchemaFieldDraftRequest['draft'],
@@ -1134,6 +1159,7 @@ export function createMigrationPreview(snapshot: TableSnapshot, request: Migrati
   });
 }
 
+/** Builds ordered ALTER TABLE statements for a supported field change. */
 function statementsForAlterField(
   table: string,
   snapshot: TableSnapshot,
@@ -1202,6 +1228,7 @@ function statementsForAlterField(
   return statements;
 }
 
+/** Compares a field snapshot with requested PostgreSQL type details. */
 function sameFieldType(
   field: TableFieldDescriptor,
   operation: Extract<SchemaOperation, { kind: 'alterField' }>,
@@ -1215,6 +1242,7 @@ function sameFieldType(
   return true;
 }
 
+/** Normalizes PostgreSQL catalog type names to the editor's supported type vocabulary. */
 function normalizeFieldType(dataType: string): string {
   if (dataType === 'character varying') return 'varchar';
   if (dataType === 'timestamp with time zone') return 'timestamptz';
@@ -1223,6 +1251,7 @@ function normalizeFieldType(dataType: string): string {
   return dataType;
 }
 
+/** Formats a validated field type and optional precision/length suffix for SQL. */
 function formatFieldType(operation: Pick<Extract<SchemaOperation, { kind: 'addNullableField' | 'alterField' }>, 'type'> & {
   characterMaximumLength?: number | null;
   numericPrecision?: number | null;
@@ -1313,6 +1342,7 @@ export function collectMigrationWarnings(snapshot: TableSnapshot, operations: Sc
   return warnings;
 }
 
+/** Enforces that table rename and drop operations run as their own batch. */
 function validateTableLifecycleOperations(operations: SchemaOperation[]): void {
   const lifecycle = operations.filter((operation) => operation.kind === 'renameTable' || operation.kind === 'dropTable');
   if (lifecycle.length && (lifecycle.length !== 1 || operations.length !== 1)) {
@@ -1320,6 +1350,7 @@ function validateTableLifecycleOperations(operations: SchemaOperation[]): void {
   }
 }
 
+/** Rejects rename operations whose destination already exists in the schema. */
 async function validateTableLifecycleTarget(
   client: Client,
   snapshot: TableSnapshot,
@@ -1341,16 +1372,19 @@ async function validateTableLifecycleTarget(
   }
 }
 
+/** Applies PostgreSQL identifier limits to a field name. */
 function validateFieldName(name: string): void {
   validatePostgresIdentifier(name, 'field');
 }
 
+/** Rejects empty, NUL-containing, or overlength PostgreSQL identifiers. */
 function validatePostgresIdentifier(name: string, kind: 'schema' | 'table' | 'field' | 'constraint'): void {
   if (!name.trim() || name.includes('\0') || Buffer.byteLength(name, 'utf8') > 63) {
     throw new MigrationPlanError('invalid', `Enter a non-empty PostgreSQL ${kind} name that fits within 63 bytes.`);
   }
 }
 
+/** Limits defaults to one expression and rejects comments or statement separators. */
 function validateDefaultExpression(expression: string): string {
   const trimmed = expression.trim();
   if (!trimmed || trimmed.length > 2048 || /[;\u0000]|--|\/\*/.test(trimmed)) {
@@ -1359,12 +1393,14 @@ function validateDefaultExpression(expression: string): string {
   return trimmed;
 }
 
+/** Quotes a PostgreSQL identifier, including embedded quote characters. */
 function quoteIdentifier(identifier: string): string {
   return `"${identifier.replaceAll('"', '""')}"`;
 }
 
 type TableDataFilter = TableDataQueryRequest['filters'][number];
 
+/** Ensures a data filter supplies the operands required by its operator. */
 function validateTableDataFilter(filter: TableDataFilter): void {
   if (filter.operator === 'between' && (filter.value === undefined || filter.secondValue === undefined)) {
     throw new MigrationPlanError('invalid', `The "between" filter for "${filter.field}" needs both a start and end value.`);
@@ -1377,6 +1413,7 @@ function validateTableDataFilter(filter: TableDataFilter): void {
   }
 }
 
+/** Builds one SQL predicate while appending all user values as bound parameters. */
 function buildTableDataPredicate(filter: TableDataFilter, values: unknown[]): string {
   const field = quoteIdentifier(filter.field);
   const textField = `${field}::text`;
@@ -1404,10 +1441,12 @@ function buildTableDataPredicate(filter: TableDataFilter, values: unknown[]): st
   return `${textField} ${sqlOperator} $${values.push(patternValue)} ESCAPE '!'`;
 }
 
+/** Escapes LIKE metacharacters while preserving literal quick-filter input. */
 function escapeLikePattern(value: string): string {
   return value.replaceAll('!', '!!').replaceAll('%', '!%').replaceAll('_', '!_');
 }
 
+/** Adds stable key ordering to a user sort so page results remain deterministic. */
 function buildTableDataOrder(snapshot: TableSnapshot, requested: TableDataQueryRequest['sort']): string {
   const ordered = new Map<string, 'ASC' | 'DESC'>();
   for (const item of requested) ordered.set(item.field, item.direction === 'desc' ? 'DESC' : 'ASC');
@@ -1419,6 +1458,7 @@ function buildTableDataOrder(snapshot: TableSnapshot, requested: TableDataQueryR
 
 type CheckToken = { kind: 'identifier' | 'number' | 'string' | 'operator' | 'punctuation'; value: string; quoted?: boolean };
 
+/** Parses CHECK expressions, validates field references, then returns canonical SQL. */
 function normalizeCheckExpression(
   source: string,
   availableFieldNames: Set<string>,
@@ -1538,6 +1578,7 @@ function normalizeCheckExpression(
   return expression;
 }
 
+/** Tokenizes the restricted CHECK expression grammar accepted by the schema editor. */
 function tokenizeCheckExpression(source: string): CheckToken[] {
   const tokens: CheckToken[] = [];
   let position = 0;
@@ -1596,10 +1637,12 @@ function tokenizeCheckExpression(source: string): CheckToken[] {
   return tokens;
 }
 
+/** Requires the apply request's reviewed SQL to match the freshly generated SQL exactly. */
 function sameStatements(expected: string[], reviewed: string[]): boolean {
   return expected.length === reviewed.length && expected.every((statement, index) => statement === reviewed[index]);
 }
 
+/** Maps PostgreSQL catalog constraint codes to shared API constraint kinds. */
 function constraintKind(
   kind: ConstraintRow['constraintType'],
 ): TableConstraintDescriptor['kind'] {
@@ -1612,6 +1655,7 @@ function constraintKind(
   }
 }
 
+/** Maps known PostgreSQL errors to actionable messages without exposing driver details. */
 function safeDatabaseMessage(error: unknown): string {
   const details = typeof error === 'object' && error !== null
     ? error as { code?: unknown; message?: unknown }
@@ -1633,6 +1677,7 @@ function safeDatabaseMessage(error: unknown): string {
   return 'The PostgreSQL request failed. Check the connection settings and database permissions.';
 }
 
+/** Adds transaction rollback guidance for migration constraint violations. */
 function migrationDatabaseMessage(error: unknown): string {
   const details = typeof error === 'object' && error !== null
     ? error as { code?: unknown; constraint?: unknown }

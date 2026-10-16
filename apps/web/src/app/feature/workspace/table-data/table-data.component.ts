@@ -43,6 +43,7 @@ export class TableDataComponent {
   readonly provider = signal(this.gridState.provider);
   readonly gridControl = new AgridControl({ allowRowReorder: false, pageSize: 20 });
 
+  /** Rebuilds the table data provider for route/connection changes and registers its tab. */
   constructor() {
     effect(() => {
       const [params, query] = this.routeState();
@@ -62,11 +63,13 @@ export class TableDataComponent {
     });
   }
 
+  /** Reloads the current server-side grid page and clears the previous error notice. */
   refresh(): void {
     this.error.set(null);
     this.gridState.rowModel.refresh({ purge: true });
   }
 
+  /** Creates a read-only paged grid provider bound to the current route and connection. */
   private createGridState(): {
     rowModel: AgridServerSideRowModel<TableDataRow>;
     provider: AgridProvider<TableDataRow>;
@@ -99,6 +102,7 @@ export class TableDataComponent {
     return { rowModel, provider };
   }
 
+  /** Loads a requested page, maps filters, and ignores stale responses after navigation. */
   private async loadRows(request: AgridServerSideRequest) {
     const [params, query] = this.routeState();
     const connection = this.connections.activeConnection();
@@ -139,6 +143,7 @@ export class TableDataComponent {
   }
 }
 
+/** Maps grid filter controls into the shared server query filter contract. */
 function mapFilters(filters: Readonly<Record<string, ColumnFilter>>): TableDataFilter[] {
   const result: TableDataFilter[] = [];
   for (const [field, filter] of Object.entries(filters)) {
@@ -168,6 +173,7 @@ function mapFilters(filters: Readonly<Record<string, ColumnFilter>>): TableDataF
   return result;
 }
 
+/** Avoids rebuilding grid columns when a server page returns the same schema. */
 function sameColumns(
   left: TableDataQueryResponse['columns'],
   right: TableDataQueryResponse['columns'],

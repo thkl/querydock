@@ -16,6 +16,7 @@ export class ConfirmationDialogService {
 
   private settle: ((confirmed: boolean) => void) | null = null;
 
+  /** Opens a confirmation request and resolves any previous request as cancelled. */
   confirm(options: ConfirmationOptions): Promise<boolean> {
     this.resolve(false);
 
@@ -25,6 +26,7 @@ export class ConfirmationDialogService {
     });
   }
 
+  /** Closes the active prompt and resolves its waiting caller exactly once. */
   resolve(confirmed: boolean): void {
     const settle = this.settle;
     this.settle = null;

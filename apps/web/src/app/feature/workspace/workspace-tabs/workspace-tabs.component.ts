@@ -19,6 +19,7 @@ export class WorkspaceTabsComponent {
   readonly closeError = signal<string | null>(null);
   private readonly pageTabElements = viewChildren<ElementRef<HTMLElement>>('pageTab');
 
+  /** Keeps the active workspace tab visible in the horizontally scrolling tab strip. */
   constructor() {
     effect(() => {
       const activeId = this.pages.activePage()?.id ?? this.pages.activeCreateTablePage()?.id
@@ -28,24 +29,28 @@ export class WorkspaceTabsComponent {
     });
   }
 
+  /** Closes a schema tab without triggering its surrounding link navigation. */
   closePage(event: MouseEvent, page: TableSchemaPage): void {
     event.preventDefault();
     event.stopPropagation();
     this.pages.closePage(page);
   }
 
+  /** Closes a data tab without triggering its surrounding link navigation. */
   closeDataPage(event: MouseEvent, page: TableDataPage): void {
     event.preventDefault();
     event.stopPropagation();
     this.pages.closeDataPage(page);
   }
 
+  /** Closes a relationship tab without triggering its surrounding link navigation. */
   closeRelationshipPage(event: MouseEvent, page: RelationshipDiagramPage): void {
     event.preventDefault();
     event.stopPropagation();
     this.pages.closeRelationshipPage(page);
   }
 
+  /** Confirms staged SQL removal before closing a new-table draft tab. */
   async closeCreatePage(event: MouseEvent, page: CreateTablePage): Promise<void> {
     event.preventDefault();
     event.stopPropagation();

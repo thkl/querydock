@@ -23,11 +23,13 @@ export class WorkspaceShellComponent {
   private dragStartX = 0;
   private dragStartWidth = 242;
 
+  /** Limits the sidebar to a usable width while preserving room for the main workspace. */
   get maxSidebarWidth(): number {
     const viewportWidth = typeof window === 'undefined' ? 1200 : window.innerWidth;
     return Math.max(this.minSidebarWidth, Math.min(480, Math.floor(viewportWidth * 0.4)));
   }
 
+  /** Starts a pointer drag on the vertical workspace splitter. */
   beginSidebarResize(event: PointerEvent): void {
     if (event.button !== 0) return;
     event.preventDefault();
@@ -37,11 +39,13 @@ export class WorkspaceShellComponent {
     (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
   }
 
+  /** Updates the sidebar width during an active pointer drag. */
   resizeSidebar(event: PointerEvent): void {
     if (!this.isResizingSidebar()) return;
     this.updateSidebarWidth(this.dragStartWidth + event.clientX - this.dragStartX);
   }
 
+  /** Ends pointer resizing and saves the chosen width locally. */
   endSidebarResize(event: PointerEvent): void {
     if (!this.isResizingSidebar()) return;
     this.isResizingSidebar.set(false);
@@ -50,6 +54,7 @@ export class WorkspaceShellComponent {
     this.persistSidebarWidth();
   }
 
+  /** Supports keyboard resizing and persists the resulting sidebar width. */
   resizeSidebarByKeyboard(event: KeyboardEvent): void {
     const step = event.shiftKey ? 32 : 16;
     let nextWidth: number;
@@ -64,21 +69,25 @@ export class WorkspaceShellComponent {
     this.updateSidebarWidth(nextWidth, true);
   }
 
+  /** Clamps the saved width after the browser viewport changes. */
   @HostListener('window:resize')
   keepSidebarWithinViewport(): void {
     const width = this.clampSidebarWidth(this.sidebarWidth());
     if (width !== this.sidebarWidth()) this.updateSidebarWidth(width, true);
   }
 
+  /** Keeps the sidebar between its minimum and responsive maximum widths. */
   private clampSidebarWidth(width: number): number {
     return Math.max(this.minSidebarWidth, Math.min(this.maxSidebarWidth, width));
   }
 
+  /** Updates sidebar state and optionally commits it to local storage. */
   private updateSidebarWidth(width: number, persist = false): void {
     this.sidebarWidth.set(this.clampSidebarWidth(width));
     if (persist) this.persistSidebarWidth();
   }
 
+  /** Restores a valid width while falling back when browser storage is unavailable. */
   private readStoredSidebarWidth(): number {
     try {
       const savedWidth = Number(localStorage.getItem(this.sidebarWidthStorageKey));
@@ -88,6 +97,7 @@ export class WorkspaceShellComponent {
     }
   }
 
+  /** Saves the current sidebar width without interrupting the active session on failure. */
   private persistSidebarWidth(): void {
     try {
       localStorage.setItem(this.sidebarWidthStorageKey, String(this.sidebarWidth()));

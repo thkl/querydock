@@ -106,6 +106,33 @@ describe('ConnectionSessionsService', () => {
     service.onModuleDestroy();
   });
 
+  it('rejects malformed session cookies and removes an unknown connection with a not-found error', () => {
+    const service = new ConnectionSessionsService();
+    const malformed = response();
+    expect(service.listConnections(request('qd_session=not-a-session'), malformed)).toEqual([]);
+
+    const created = response();
+    service.addConnection(request(), created, configuration, summary('querydock_test'));
+    const cookie = cookieFrom(created);
+    expect(() => service.removeConnection(request(cookie), response(), 'unknown'))
+      .toThrow(NotFoundException);
+    service.onModuleDestroy();
+  });
+
+  it('honors explicit secure-cookie configuration and clears its cleanup timer on shutdown', () => {
+    vi.useFakeTimers();
+    vi.stubEnv('QUERYDOCK_COOKIE_SECURE', 'false');
+    const service = new ConnectionSessionsService();
+    service.onModuleInit();
+    expect(vi.getTimerCount()).toBe(1);
+
+    const created = response();
+    service.addConnection(request(undefined, true), created, configuration, summary('querydock_test'));
+    expect(created.headers['Set-Cookie']).not.toContain('; Secure');
+    service.onModuleDestroy();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('expires stale sessions and clears the browser cookie on access', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-10-14T10:00:00Z'));
@@ -119,6 +146,22 @@ describe('ConnectionSessionsService', () => {
     expect(service.listConnections(request(cookie), expiredResponse)).toEqual([]);
     expect(expiredResponse.headers['Set-Cookie']).toContain('Max-Age=0');
     expect(() => service.requireConnection(request(cookie), response(), 'any')).toThrow(UnauthorizedException);
+    service.onModuleDestroy();
+  });
+
+  it('rejects removal from an expired session and clears its cookie', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-14T10:00:00Z'));
+    const service = new ConnectionSessionsService();
+    const created = response();
+    const connection = service.addConnection(request(), created, configuration, summary('querydock_test'));
+    const cookie = cookieFrom(created);
+    vi.advanceTimersByTime(31 * 60 * 1000);
+    const expired = response();
+
+    expect(() => service.removeConnection(request(cookie), expired, connection.connectionId))
+      .toThrow(UnauthorizedException);
+    expect(expired.headers['Set-Cookie']).toContain('Max-Age=0');
     service.onModuleDestroy();
   });
 });

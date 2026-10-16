@@ -1,8 +1,9 @@
 import '@angular/compiler';
+import 'fake-indexeddb/auto';
 import { Injector, signal } from '@angular/core';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ConnectResponse, CreateTableField, MigrationPreviewRequest } from '@querydock/contracts';
-import { ConnectionApiService } from '../src/app/feature/workspace/connections/connection-api.service';
+import { ApiRequestError, ConnectionApiService } from '../src/app/feature/workspace/connections/connection-api.service';
 import { RunbookService } from '../src/app/feature/workspace/runbook/runbook.service';
 
 function connection(id: string, database: string): ConnectResponse {
@@ -35,6 +36,7 @@ function createHarness() {
       appliedStatements: plan.reviewedStatements,
       snapshots: [],
     })),
+    inspectTable: vi.fn(async () => { throw new Error('Unexpected table inspection.'); }),
     refreshResources: vi.fn(async () => undefined),
   };
   const injector = Injector.create({ providers: [
@@ -47,6 +49,8 @@ function createHarness() {
 const fields: CreateTableField[] = [
   { name: 'id', type: 'integer', nullable: false, defaultExpression: null, identityGeneration: 'always' },
 ];
+
+beforeEach(async () => clearRunbookStore());
 
 describe('RunbookService', () => {
   it('stages multiple table drafts into one same-schema runbook with server preview SQL', async () => {
@@ -118,4 +122,53 @@ describe('RunbookService', () => {
     expect(service.canApply()).toBe(false);
     expect(connections.refreshResources).toHaveBeenCalledWith('connection-alpha');
   });
+
+  it('restores staged runbook operations from IndexedDB in a new service instance', async () => {
+    const first = createHarness();
+    await first.service.stageCreateTable(first.alpha, 'public', 'durable_table', fields, false, 'draft-durable');
+    expect(first.service.storageAvailable()).toBe(true);
+
+    const restored = createHarness();
+    await restored.service.ready;
+
+    expect(restored.service.runbook()).toMatchObject({
+      table: 'durable_table',
+      operations: [{ kind: 'createTable', draftId: 'draft-durable', table: 'durable_table' }],
+      preview: { statements: ['createTable:durable_table'] },
+    });
+  });
+
+  it('keeps a lost apply outcome uncertain until the database confirms the batch was not applied', async () => {
+    const { service, connections, alpha } = createHarness();
+    await service.stageCreateTable(alpha, 'public', 'uncertain_table', fields, false, 'draft-uncertain');
+    connections.applyMigration.mockRejectedValueOnce(new Error('Network disconnected after request submission.'));
+
+    await expect(service.applyPending()).rejects.toThrow('Network disconnected');
+    expect(service.runbook()?.applyOutcomeUnknown).toBe(true);
+    await expect(service.clearRunbook()).resolves.toBeUndefined();
+    expect(service.runbook()?.applyOutcomeUnknown).toBe(true);
+
+    connections.inspectTable.mockRejectedValueOnce(new ApiRequestError('The table is not visible.', 404));
+    await service.resolveUnknownApply('notApplied');
+
+    expect(service.runbook()?.applyOutcomeUnknown).toBe(false);
+    expect(service.runbook()?.operations).toHaveLength(1);
+    expect(service.reconciling()).toBe(false);
+  });
 });
+
+function clearRunbookStore(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open('querydock-browser-state', 1);
+    request.onupgradeneeded = () => request.result.createObjectStore('runbooks');
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const database = request.result;
+      const transaction = database.transaction('runbooks', 'readwrite');
+      transaction.objectStore('runbooks').clear();
+      transaction.oncomplete = () => { database.close(); resolve(); };
+      transaction.onerror = () => { database.close(); reject(transaction.error); };
+      transaction.onabort = () => { database.close(); reject(transaction.error); };
+    };
+  });
+}

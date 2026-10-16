@@ -88,11 +88,13 @@ export class WorkspacePagesService {
     return this.relationshipPages().find((page) => page.connectionId === connectionId && page.route === route) ?? null;
   });
 
+  /** Tracks router navigation so active tabs follow the current URL. */
   constructor() {
     this.router.events.pipe(filter((event) => event instanceof NavigationEnd))
       .subscribe((event) => this.currentRoute.set(event.urlAfterRedirects));
   }
 
+  /** Registers, selects, and navigates to a table schema tab. */
   openTableSchema(connectionId: string, schema: string, table: string): void {
     const page = this.registerOpenedTableSchema(connectionId, schema, table);
 
@@ -100,12 +102,14 @@ export class WorkspacePagesService {
     void this.router.navigateByUrl(page.route);
   }
 
+  /** Registers, selects, and navigates to a table data tab. */
   openTableData(connectionId: string, schema: string, table: string): void {
     const page = this.registerOpenedTableData(connectionId, schema, table);
     this.connections.selectConnection(connectionId);
     void this.router.navigateByUrl(page.route);
   }
 
+  /** Creates or returns the unique data tab for a connection, schema, and table. */
   registerOpenedTableData(connectionId: string, schema: string, table: string): TableDataPage {
     const id = JSON.stringify(['data', connectionId, schema, table]);
     console.log(`registerOPenTableData ${id}`);
@@ -129,11 +133,13 @@ export class WorkspacePagesService {
     return page;
   }
 
+  /** Activates a data tab and its owning database connection. */
   selectDataPage(page: TableDataPage): void {
     this.connections.selectConnection(page.connectionId);
     void this.router.navigateByUrl(page.route);
   }
 
+  /** Closes a data tab and activates the next available workspace page. */
   closeDataPage(page: TableDataPage): void {
     const wasActive = this.activeDataPage()?.id === page.id;
     this.dataPages.update((pages) => pages.filter((candidate) => candidate.id !== page.id));
@@ -155,22 +161,26 @@ export class WorkspacePagesService {
     }
   }
 
+  /** Creates a uniquely identified table draft tab and navigates to it. */
   openCreateTable(schema: string): void {
     const page = this.registerOpenedCreateTable(schema, crypto.randomUUID());
     void this.router.navigateByUrl(page.route);
   }
 
+  /** Registers and navigates to the relationship diagram for a connection. */
   openRelationshipDiagram(connectionId: string): void {
     const page = this.registerOpenedRelationshipDiagram(connectionId);
     this.connections.selectConnection(connectionId);
     void this.router.navigateByUrl(page.route);
   }
 
+  /** Registers the diagram tab and activates its connection without navigation. */
   prepareRelationshipDiagram(connectionId: string): void {
     this.registerOpenedRelationshipDiagram(connectionId);
     this.connections.selectConnection(connectionId);
   }
 
+  /** Creates or returns the one relationship-diagram tab for a connection. */
   registerOpenedRelationshipDiagram(connectionId: string): RelationshipDiagramPage {
     let page = this.relationshipPages().find((candidate) => candidate.connectionId === connectionId);
     if (!page) {
@@ -188,11 +198,13 @@ export class WorkspacePagesService {
     return page;
   }
 
+  /** Activates a relationship tab and its database connection. */
   selectRelationshipPage(page: RelationshipDiagramPage): void {
     this.connections.selectConnection(page.connectionId);
     void this.router.navigateByUrl(page.route);
   }
 
+  /** Closes a relationship tab and chooses another open workspace page. */
   closeRelationshipPage(page: RelationshipDiagramPage): void {
     const wasActive = this.activeRelationshipPage()?.id === page.id;
     const remaining = this.relationshipPages().filter((candidate) => candidate.id !== page.id);
@@ -217,6 +229,7 @@ export class WorkspacePagesService {
     }
   }
 
+  /** Registers a new-table tab, restoring an existing draft when its ID is reused. */
   registerOpenedCreateTable(schema: string, draftId: string = crypto.randomUUID()): CreateTablePage {
     const connectionId = this.connections.activeConnectionId();
     let page = this.createTablePages().find((candidate) => candidate.id === draftId);
@@ -236,10 +249,12 @@ export class WorkspacePagesService {
     return page;
   }
 
+  /** Returns the saved editor state for a new-table tab. */
   createTableDraft(pageId: string): CreateTableDraft | null {
     return this.createTableDrafts().get(pageId) ?? null;
   }
 
+  /** Saves a draft and updates the tab label and title from its table name. */
   saveCreateTableDraft(pageId: string, draft: CreateTableDraft): void {
     this.createTableDrafts.update((current) => {
       const next = new Map(current);
@@ -254,11 +269,13 @@ export class WorkspacePagesService {
     }));
   }
 
+  /** Activates a new-table draft and restores its connection when present. */
   selectCreateTablePage(page: CreateTablePage): void {
     if (page.connectionId) this.connections.selectConnection(page.connectionId);
     void this.router.navigateByUrl(page.route);
   }
 
+  /** Removes a draft tab and its local draft state, then activates a remaining page. */
   closeCreateTablePage(page: CreateTablePage): void {
     const wasActive = this.activeCreateTablePage()?.id === page.id;
     this.createTablePages.update((pages) => pages.filter((candidate) => candidate.id !== page.id));
@@ -288,6 +305,7 @@ export class WorkspacePagesService {
     else void this.router.navigateByUrl('/');
   }
 
+  /** Creates or reuses the schema tab identified by connection, schema, and table. */
   registerOpenedTableSchema(connectionId: string, schema: string, table: string): TableSchemaPage {
     const id = JSON.stringify([connectionId, schema, table]);
     let page = this.pages().find((candidate) => candidate.id === id);
@@ -311,11 +329,13 @@ export class WorkspacePagesService {
     return page;
   }
 
+  /** Activates a schema tab and its owning connection. */
   selectPage(page: TableSchemaPage): void {
     this.connections.selectConnection(page.connectionId);
      void this.router.navigateByUrl(page.route);
   }
 
+  /** Closes a schema tab and activates the next available page. */
   closePage(page: TableSchemaPage): void {
     const wasActive = this.activePage()?.id === page.id;
     const remaining = this.pages().filter((candidate) => candidate.id !== page.id);
@@ -341,6 +361,7 @@ export class WorkspacePagesService {
     }
   }
 
+  /** Replaces a table tab's name, label, title, and route after a successful rename. */
   renameTablePage(connectionId: string, schema: string, oldName: string, newName: string): TableSchemaPage | null {
     const page = this.pages().find((candidate) => candidate.connectionId === connectionId
       && candidate.schema === schema && candidate.table === oldName);
@@ -361,12 +382,14 @@ export class WorkspacePagesService {
     return updated;
   }
 
+  /** Finds and closes the schema tab for a renamed or dropped table. */
   closeTablePage(connectionId: string, schema: string, table: string): void {
     const page = this.pages().find((candidate) => candidate.connectionId === connectionId
       && candidate.schema === schema && candidate.table === table);
     if (page) this.closePage(page);
   }
 
+  /** Removes every tab and draft owned by a disconnected database connection. */
   closeConnectionPages(connectionId: string): void {
     const currentRoute = this.currentRoute();
     const closesCurrentRoute = this.pages().some((page) => page.connectionId === connectionId && page.route === currentRoute)
@@ -409,6 +432,7 @@ export class WorkspacePagesService {
     void this.router.navigateByUrl('/');
   }
 
+  /** Checks whether a schema page is active for the given database table. */
   isActiveTable(connectionId: string, schema: string, table: string): boolean {
     const active = this.activePage();
     return active?.connectionId === connectionId && active.schema === schema && active.table === table;

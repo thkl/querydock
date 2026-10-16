@@ -30,16 +30,19 @@ export class ConnectionSessionsService implements OnModuleInit, OnModuleDestroy 
   private readonly sessions = new Map<string, BrowserSession>();
   private cleanupTimer?: NodeJS.Timeout;
 
+  /** Starts periodic removal of expired in-memory browser sessions. */
   onModuleInit(): void {
     this.cleanupTimer = setInterval(() => this.removeExpiredSessions(), 60_000);
     this.cleanupTimer.unref();
   }
 
+  /** Stops cleanup and discards all server-side credentials during shutdown. */
   onModuleDestroy(): void {
     if (this.cleanupTimer) clearInterval(this.cleanupTimer);
     this.sessions.clear();
   }
 
+  /** Stores database credentials for this browser session and returns a redacted summary. */
   addConnection(
     request: Request,
     response: Response,
@@ -59,6 +62,7 @@ export class ConnectionSessionsService implements OnModuleInit, OnModuleDestroy 
     return connection;
   }
 
+  /** Lists active connection summaries and refreshes the session's sliding expiry. */
   listConnections(request: Request, response: Response): ConnectResponse[] {
     const sessionId = this.sessionIdFromRequest(request);
     if (!sessionId) return [];
@@ -74,6 +78,7 @@ export class ConnectionSessionsService implements OnModuleInit, OnModuleDestroy 
     return [...session.connections.values()].map(({ summary }) => summary);
   }
 
+  /** Resolves credentials owned by the current session or throws an HTTP error. */
   requireConnection(
     request: Request,
     response: Response,
@@ -95,6 +100,7 @@ export class ConnectionSessionsService implements OnModuleInit, OnModuleDestroy 
     return connection.configuration;
   }
 
+  /** Removes a session-owned connection and clears the cookie when it was the last one. */
   removeConnection(request: Request, response: Response, connectionId: string): void {
     const sessionId = this.sessionIdFromRequest(request);
     const session = sessionId ? this.sessions.get(sessionId) : undefined;
@@ -115,6 +121,7 @@ export class ConnectionSessionsService implements OnModuleInit, OnModuleDestroy 
     this.writeSessionCookie(request, response, sessionId!);
   }
 
+  /** Reuses a valid session cookie or allocates a fresh opaque session identifier. */
   private getOrCreateSession(request: Request): { sessionId: string; session: BrowserSession } {
     const existingId = this.sessionIdFromRequest(request);
     const existing = existingId ? this.sessions.get(existingId) : undefined;
@@ -129,6 +136,7 @@ export class ConnectionSessionsService implements OnModuleInit, OnModuleDestroy 
     return { sessionId, session };
   }
 
+  /** Reads and validates the opaque session identifier from the request cookie header. */
   private sessionIdFromRequest(request: Request): string | undefined {
     const cookieHeader = request.headers.cookie;
     if (!cookieHeader) return undefined;
@@ -145,10 +153,12 @@ export class ConnectionSessionsService implements OnModuleInit, OnModuleDestroy 
     return undefined;
   }
 
+  /** Extends the session lifetime after an authenticated session operation. */
   private touchSession(session: BrowserSession): void {
     session.expiresAt = Date.now() + SESSION_TTL_MS;
   }
 
+  /** Sends the scoped, HTTP-only session cookie with the configured secure policy. */
   private writeSessionCookie(request: Request, response: Response, sessionId: string): void {
     const secure = this.useSecureCookie(request) ? '; Secure' : '';
     response.setHeader(
@@ -157,6 +167,7 @@ export class ConnectionSessionsService implements OnModuleInit, OnModuleDestroy 
     );
   }
 
+  /** Expires the browser's session cookie using the same security attributes as creation. */
   private clearSessionCookie(request: Request, response: Response): void {
     const secure = this.useSecureCookie(request) ? '; Secure' : '';
     response.setHeader(
@@ -165,6 +176,7 @@ export class ConnectionSessionsService implements OnModuleInit, OnModuleDestroy 
     );
   }
 
+  /** Applies an explicit cookie setting, otherwise derives Secure from proxy/TLS context. */
   private useSecureCookie(request: Request): boolean {
     const configured = process.env['QUERYDOCK_COOKIE_SECURE']?.trim().toLowerCase();
     if (configured === 'true') return true;
@@ -172,6 +184,7 @@ export class ConnectionSessionsService implements OnModuleInit, OnModuleDestroy 
     return request.secure || process.env['NODE_ENV'] === 'production';
   }
 
+  /** Deletes every session whose sliding expiry has elapsed. */
   private removeExpiredSessions(): void {
     const now = Date.now();
     for (const [sessionId, session] of this.sessions) {
