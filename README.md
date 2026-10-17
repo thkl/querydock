@@ -2,6 +2,12 @@
 
 QueryDock is a self-hostable database workbench. The Angular client is organized by feature under `apps/web/src/app/feature/`; component templates live in separate HTML files, and the root app component contains only the router outlet. The NestJS API owns database connections and schema migration planning.
 
+![image](./docs/qd_1.png)
+
+
+![image](./docs/qd_2.png)
+
+
 ## Requirements
 
 - Node.js 24.15 or newer
