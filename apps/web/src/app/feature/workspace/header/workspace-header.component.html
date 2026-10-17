@@ -20,10 +20,29 @@
       <span aria-hidden="true">→</span>
     </a>
   }
-  <div class="connection-summary">
-    <span class="connection-dot"></span><span>PostgreSQL</span><span class="connection-divider">/</span>
-    <span class="muted">project_dev</span><span class="chevron">⌄</span>
-  </div>
+  @if (connection.activeConnection(); as activeConnection) {
+    <div
+      class="connection-summary"
+      [attr.title]="connectionName() ?? activeConnection.target.database"
+    >
+      <span class="connection-dot" aria-hidden="true"></span>
+      <span class="connection-name">{{ connectionName() }}</span>
+      <span class="connection-divider" aria-hidden="true">/</span>
+      <span class="connection-adapter">{{ activeConnection.target.adapter === 'postgresql' ? 'PostgreSQL' : 'SQL Server' }}</span>
+      @if (activeConnection.serverVersion) {
+        <span class="connection-divider connection-version-divider" aria-hidden="true">/</span>
+        <span class="connection-version" [attr.title]="'Server version ' + activeConnection.serverVersion">
+          v{{ activeConnection.serverVersion }}
+        </span>
+      }
+    </div>
+  } @else {
+    <div class="connection-summary connection-summary--disconnected" title="No active database connection">
+      <span class="connection-dot" aria-hidden="true"></span><span class="muted">Not connected</span>
+    </div>
+  }
   <button class="icon-button help-button" type="button" aria-label="Help">?</button>
+<!--
   <button class="avatar" type="button" aria-label="Local profile">TK</button>
+-->
 </header>

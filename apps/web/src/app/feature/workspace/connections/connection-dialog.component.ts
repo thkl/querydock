@@ -119,7 +119,7 @@ export class ConnectionDialogComponent {
       }
       return;
     }
-    const connected = await this.state.connect(configuration, !saveInVault);
+    const connected = await this.state.connect(configuration, !saveInVault, saveInVault ? profileName : undefined);
     if (!connected) return;
     if (saveInVault) {
       try {
@@ -164,7 +164,7 @@ export class ConnectionDialogComponent {
   /** Connects with the selected decrypted profile. */
   async connectSaved(profile: SavedConnectionProfile): Promise<void> {
     this.vaultMessage.set(null);
-    await this.state.connect(profile.configuration);
+    await this.state.connect(profile.configuration, true, profile.name);
   }
 
   /** Requires a second click before removing a saved profile from browser storage. */

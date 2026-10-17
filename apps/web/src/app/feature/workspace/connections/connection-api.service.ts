@@ -33,6 +33,7 @@ export class ApiRequestError extends Error {
 
 @Injectable({ providedIn: 'root' })
 export class ConnectionApiService {
+  readonly connectionNamesById = signal<ReadonlyMap<string, string>>(new Map());
   readonly connections = signal<ConnectResponse[]>([]);
   readonly sessionRestoreComplete = signal(false);
   readonly activeConnectionId = signal<string | null>(null);
@@ -96,8 +97,12 @@ export class ConnectionApiService {
     }
   }
 
-  /** Creates a server session connection, activates it, and loads its visible resources. */
-  async connect(configuration: DatabaseConnectRequest, closeOnSuccess = true): Promise<boolean> {
+  /** Creates and activates a server connection, loads resources, and keeps an optional local display name. */
+  async connect(
+    configuration: DatabaseConnectRequest,
+    closeOnSuccess = true,
+    connectionName?: string,
+  ): Promise<boolean> {
     this.connectError.set(null);
     this.connecting.set(true);
     try {
@@ -109,6 +114,13 @@ export class ConnectionApiService {
         ...current.filter(({ connectionId }) => connectionId !== connection.connectionId),
         connection,
       ]);
+      if (connectionName?.trim()) {
+        this.connectionNamesById.update((current) => {
+          const next = new Map(current);
+          next.set(connection.connectionId, connectionName.trim());
+          return next;
+        });
+      }
       this.activeConnectionId.set(connection.connectionId);
       if (closeOnSuccess) this.connectDialogOpen.set(false);
       await this.loadResources(connection.connectionId).catch((error: unknown) => {
@@ -130,6 +142,11 @@ export class ConnectionApiService {
     try {
       await request<void>(`/api/connections/${encodeURIComponent(connectionId)}`, { method: 'DELETE' });
       this.connections.update((current) => current.filter(({ connectionId: id }) => id !== connectionId));
+      this.connectionNamesById.update((current) => {
+        const next = new Map(current);
+        next.delete(connectionId);
+        return next;
+      });
       this.resourcesByConnection.update((current) => {
         const next = new Map(current);
         next.delete(connectionId);

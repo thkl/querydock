@@ -1,7 +1,7 @@
 # QueryDock — MVP Implementation Plan
 
-Status: Milestones B, C, and D are complete by user sign-off. Milestone E is in progress. It includes the relationship diagram, connection workflow improvements, and PostgreSQL data browsing/editing. A first SQL Server adapter now supports connection, discovery, inspection, and data workflows; SQL Server schema editing and cross-table schema dependency planning remain outstanding.
-Date: 2026-10-13.
+Status: Milestones B, C, D, and E are complete by user sign-off. Milestone F is next. It covers queries and mixed runbooks, and adds SQL Server schema migration support with cross-table foreign-key dependency planning. The SQL Server adapter currently supports connection, discovery, inspection, and data workflows; schema editing remains disabled until Milestone F.
+Date: 2026-10-17.
 
 References:
 
@@ -189,13 +189,14 @@ Use the [Milestone E completion checklist](milestone-e-completion-checklist.md) 
 
 Confirm keyless-table behavior and precise concurrency rules before implementing writes; initially read-only is the recommended fallback.
 
-## 8. Milestone F — Queries and mixed runbooks
+## 8. Milestone F — Queries, mixed runbooks, and SQL Server schema migrations
 
 ### Deliverables
 
 - SQL query tabs with bounded results and useful error display.
 - Explicit authored SQL steps in runbooks.
 - Ordered schema/data/custom-SQL steps across multiple tables in one database.
+- SQL Server adapter-generated foreign-key creation/removal and table-drop operations, including dependency-aware cross-table batches. Keep the initial DDL scope explicit; this does not imply full PostgreSQL schema-edit parity.
 - Result and execution UI consistent with generated operations.
 
 ### Acceptance criteria
@@ -203,6 +204,9 @@ Confirm keyless-table behavior and precise concurrency rules before implementing
 - Query text and independent results work across connection-bound tabs.
 - Result sets do not silently become editable without validated row identity.
 - A mixed runbook can add a nullable field, backfill rows, and enforce non-nullability in order.
+- SQL Server foreign-key editing uses adapter-reported target keys and type compatibility, and respects the active principal's permissions.
+- SQL Server can stage foreign-key removals and referenced-table drops in one runbook. Preview orders removals before table drops, rejects unstaged inbound references and new foreign keys targeting dropped tables, and applies valid batches atomically without implicit `CASCADE`.
+- SQL Server adapter capabilities expose only schema operations implemented and permitted for the active database principal; unsupported operations remain clearly unavailable.
 - Custom SQL uncertainty is disclosed and appropriate acknowledgement required.
 - Multiple successful Apply batches export in their original execution order.
 - Pending, applied, rolled-back, rejected, and unknown outcomes are clearly distinguished.
