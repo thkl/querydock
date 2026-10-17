@@ -132,7 +132,7 @@ The initial Apply contract uses deterministic server-side revalidation rather th
 - New tables can be staged with adapter-provided field types, type parameters, nullability, defaults, and supported identity options. Preview and Apply confirm the schema and table name are available; Apply serializes concurrent QueryDock creates with a transaction-scoped advisory lock.
 - The identity control is populated from adapter capabilities and supports adding, changing, or removing `GENERATED ALWAYS` / `BY DEFAULT` on smallint, integer, and bigint fields. Identity changes include nullability/default checks and explicit warnings for populated tables.
 - The constraint grid can add and remove primary-key, unique, foreign-key, and CHECK constraints. Foreign-key previews validate the target table, fields, and primary/unique key; Apply repeats those checks, generates SQL on the server, and reports existing-row validation risk. Exclusion constraints remain read only.
-- Table rename and drop are adapter-generated, fingerprint-checked runbook operations with destructive warning acknowledgement and tab updates after Apply. Cross-table dependency ordering is deferred to Milestone E; the selected-operation integration matrix remains a Milestone D validation task. Standalone index editing remains a scope decision.
+- Table rename and drop are adapter-generated, fingerprint-checked runbook operations with destructive warning acknowledgement and tab updates after Apply. Cross-table dependency ordering is a Milestone E capability; the selected-operation integration matrix remains a Milestone D validation task. Standalone index editing remains a scope decision.
 
 ## 7. Milestone E — Relationship diagram, data browsing, and batch editing
 
@@ -154,6 +154,11 @@ Use the [Milestone E completion checklist](milestone-e-completion-checklist.md) 
 - A second, materially different SQL Server adapter in Milestone E to test that the client depends on shared contracts and declared capabilities rather than PostgreSQL-specific behavior. Both adapters should support the same workflows where their capabilities allow it; genuine engine differences must be reported through adapter contracts and UI capability handling.
 - SQL Server v1 supports secure connection setup, resource discovery, table/view inspection, bounded search/sort/filter/paging, safe row identity, concurrency-checked direct row changes, and adapter-generated data Runbook preview/Apply. Schema editing and foreign-key editing are explicitly unavailable for SQL Server until its DDL planner is implemented.
 - [x] SQL Server navigation separates tables from views, and a view page displays its adapter-provided CREATE/view definition SQL when the connected database principal has metadata permission.
+
+### Current implementation slice
+
+- PostgreSQL runbooks can preview and apply schema plans for multiple tables as one transaction. The adapter orders foreign-key removals before referenced-key/table drops and key/field creation before new foreign keys; an inbound dependency that is not staged for removal is reported with its source table and constraint. It does not use implicit `CASCADE`.
+- The client retains separate per-table baselines and operations in the connection-scoped runbook, presents an aggregate preview, and reconciles uncertain multi-table outcomes by inspecting every affected table. Row-data batches remain single-table. SQL Server explicitly rejects cross-table schema batches until its schema planner supports them.
 
 ### Candidate scope (to confirm)
 

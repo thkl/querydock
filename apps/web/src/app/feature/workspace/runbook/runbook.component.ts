@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
 import { RouterLink } from '@angular/router';
 import { SqlEditorComponent } from '../sql-editor/sql-editor.component';
-import { RunbookService, type SchemaRunbook } from './runbook.service';
+import { RunbookService, type SchemaRunbook, type SchemaRunbookTableChange } from './runbook.service';
 import { ConfirmationDialogService } from '../confirmation/confirmation-dialog.service';
 import { WorkspacePagesService } from '../workspace-pages.service';
 import { ConnectionApiService } from '../connections/connection-api.service';
@@ -35,19 +35,21 @@ export class RunbookComponent {
       acknowledgedWarnings = warnings;
     }
     const state = this.runbook.runbook();
-    const tableOperation = state?.operations[0];
+    const tableChanges = state ? this.tableChangesOf(state) : [];
     try {
       await this.runbook.applyPending(acknowledgedWarnings);
       if (!state) return;
       const connectionId = this.connectionIdFor(state);
-      this.removeAppliedCreateDraftTabs(state, connectionId);
-      if (tableOperation?.kind === 'renameTable') {
-        const page = connectionId
-          ? this.workspacePages.renameTablePage(connectionId, state.schema, state.table, tableOperation.newName)
-          : null;
-        if (page) this.workspacePages.selectPage(page);
-      } else if (tableOperation?.kind === 'dropTable' && connectionId) {
-        this.workspacePages.closeTablePage(connectionId, state.schema, state.table);
+      this.removeAppliedCreateDraftTabs(state, connectionId, tableChanges);
+      if (connectionId) for (const change of tableChanges) {
+        const tableOperation = change.operations.find((operation) =>
+          operation.kind === 'renameTable' || operation.kind === 'dropTable');
+        if (tableOperation?.kind === 'renameTable') {
+          const page = this.workspacePages.renameTablePage(connectionId, change.schema, change.table, tableOperation.newName);
+          if (page) this.workspacePages.selectPage(page);
+        } else if (tableOperation?.kind === 'dropTable') {
+          this.workspacePages.closeTablePage(connectionId, change.schema, change.table);
+        }
       }
     } catch {
       // The runbook service exposes the detailed failure message in the workspace.
@@ -77,17 +79,21 @@ export class RunbookComponent {
     });
     if (!confirmed) return;
     const state = this.runbook.runbook();
-    const tableOperation = state?.operations[0];
+    const tableChanges = state ? this.tableChangesOf(state) : [];
     try {
       await this.runbook.resolveUnknownApply(outcome);
       if (outcome !== 'applied' || !state) return;
       const connectionId = this.connectionIdFor(state);
-      this.removeAppliedCreateDraftTabs(state, connectionId);
-      if (tableOperation?.kind === 'renameTable' && connectionId) {
-        const page = this.workspacePages.renameTablePage(connectionId, state.schema, state.table, tableOperation.newName);
-        if (page) this.workspacePages.selectPage(page);
-      } else if (tableOperation?.kind === 'dropTable' && connectionId) {
-        this.workspacePages.closeTablePage(connectionId, state.schema, state.table);
+      this.removeAppliedCreateDraftTabs(state, connectionId, tableChanges);
+      if (connectionId) for (const change of tableChanges) {
+        const tableOperation = change.operations.find((operation) =>
+          operation.kind === 'renameTable' || operation.kind === 'dropTable');
+        if (tableOperation?.kind === 'renameTable') {
+          const page = this.workspacePages.renameTablePage(connectionId, change.schema, change.table, tableOperation.newName);
+          if (page) this.workspacePages.selectPage(page);
+        } else if (tableOperation?.kind === 'dropTable') {
+          this.workspacePages.closeTablePage(connectionId, change.schema, change.table);
+        }
       }
     } catch (error) {
       this.runbook.reportError(error);
@@ -107,12 +113,27 @@ export class RunbookComponent {
   }
 
   /** Removes the editor tabs for create operations confirmed by the applied batch. */
-  private removeAppliedCreateDraftTabs(state: SchemaRunbook, connectionId: string | null): void {
+  private removeAppliedCreateDraftTabs(
+    state: SchemaRunbook,
+    connectionId: string | null,
+    changes = this.tableChangesOf(state),
+  ): void {
     if (!connectionId) return;
-    const createdTables = state.operations.flatMap((operation) => operation.kind === 'createTable'
+    const createdTables = changes.flatMap(({ operations }) => operations.flatMap((operation) => operation.kind === 'createTable'
       ? [{ draftId: operation.draftId, table: operation.table }]
-      : []);
+      : []));
     this.workspacePages.completeCreatedTableDrafts(connectionId, createdTables);
+  }
+
+  /** Supports newer per-table runbooks and older single-plan records. */
+  private tableChangesOf(state: SchemaRunbook): SchemaRunbookTableChange[] {
+    return state.tableChanges ?? (state.operations.length
+      ? [{ schema: state.schema, table: state.table, baseline: state.baseline, operations: state.operations }]
+      : []);
+  }
+
+  changesFor(state: SchemaRunbook): SchemaRunbookTableChange[] {
+    return this.tableChangesOf(state);
   }
 
   /** Finds the live session connection matching the runbook's database target. */

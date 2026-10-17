@@ -335,11 +335,18 @@ export const schemaOperationSchema = z.discriminatedUnion('kind', [
 
 export type SchemaOperation = z.infer<typeof schemaOperationSchema>;
 
-export const migrationPreviewRequestSchema = z.object({
+export const migrationTablePlanSchema = z.object({
   schema: z.string().max(1024),
   table: z.string().max(1024),
   baselineFingerprint: tableSnapshotSchema.shape.fingerprint.nullable(),
   operations: z.array(schemaOperationSchema).min(1).max(50),
+});
+
+export type MigrationTablePlan = z.infer<typeof migrationTablePlanSchema>;
+
+export const migrationPreviewRequestSchema = migrationTablePlanSchema.extend({
+  /** Additional table plans in one atomic batch, ordered by the server's dependency planner. */
+  tablePlans: z.array(migrationTablePlanSchema).min(2).max(50).optional(),
 });
 
 export type MigrationPreviewRequest = z.infer<typeof migrationPreviewRequestSchema>;
@@ -397,6 +404,12 @@ export type MigrationApplyRequest = z.infer<typeof migrationApplyRequestSchema>;
 export const migrationApplyResponseSchema = z.object({
   appliedStatements: z.array(z.string()),
   snapshots: z.array(tableSnapshotSchema),
+  tableResults: z.array(z.object({
+    schema: z.string(),
+    table: z.string(),
+    resultingTable: z.string().nullable(),
+    snapshot: tableSnapshotSchema.nullable(),
+  })).optional(),
 });
 
 export type MigrationApplyResponse = z.infer<typeof migrationApplyResponseSchema>;

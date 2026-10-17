@@ -138,12 +138,11 @@ export class TableSchemaComponent {
 
     const pending = this.runbook.runbook();
     const connection = this.connections.activeConnection();
-    if (!pending || !connection || !sameTarget(pending.target, connection.target)
-      || pending.schema !== table.schema || pending.table !== table.name) {
+    if (!pending || !connection || !sameTarget(pending.target, connection.target)) {
       return this.appendFieldDraft(fields);
     }
 
-    for (const operation of pending.operations) {
+    for (const operation of this.runbook.operationsForResource(pending, table.schema, table.name)) {
       if (operation.kind === 'addNullableField') {
         if (fields.some(({ operationName }) => operationName === operation.name)
           || fields.some(({ sourceName }) => sourceName === operation.name)) continue;
@@ -191,9 +190,9 @@ export class TableSchemaComponent {
     const pending = this.runbook.runbook();
     const table = this.snapshot();
     const connection = this.connections.activeConnection();
-    if (!pending || !table || !connection || !sameTarget(pending.target, connection.target)
-      || pending.schema !== table.schema || pending.table !== table.name) return null;
-    return pending.operations.find((operation) => operation.kind === 'renameTable' || operation.kind === 'dropTable') ?? null;
+    if (!pending || !table || !connection || !sameTarget(pending.target, connection.target)) return null;
+    return this.runbook.operationsForResource(pending, table.schema, table.name)
+      .find((operation) => operation.kind === 'renameTable' || operation.kind === 'dropTable') ?? null;
   });
   readonly uncommittedSchemaChangeCount = computed(() =>
     this.displayFields().filter((field) => field.isUncommitted).length
@@ -1179,8 +1178,7 @@ export class TableSchemaComponent {
 
     const pending = this.runbook.runbook();
     const connection = this.connections.activeConnection();
-    if (pending && connection && sameTarget(pending.target, connection.target)
-      && pending.schema === table.schema && pending.table === table.name) for (const operation of pending.operations) {
+    if (pending && connection && sameTarget(pending.target, connection.target)) for (const operation of this.runbook.operationsForResource(pending, table.schema, table.name)) {
       if (operation.kind === 'addConstraint') {
         rows.push({
           sourceName: null,
@@ -1301,9 +1299,8 @@ export class TableSchemaComponent {
     const pending = this.runbook.runbook();
     const connection = this.connections.activeConnection();
     const table = this.snapshot();
-    if (!pending || !connection || !table || !sameTarget(pending.target, connection.target)
-      || pending.schema !== table.schema || pending.table !== table.name) return false;
-    return pending.operations.some((operation) =>
+    if (!pending || !connection || !table || !sameTarget(pending.target, connection.target)) return false;
+    return this.runbook.operationsForResource(pending, table.schema, table.name).some((operation) =>
       operation.kind === 'dropConstraint' && operation.name === name);
   }
 

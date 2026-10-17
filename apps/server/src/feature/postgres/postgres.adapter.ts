@@ -8,6 +8,7 @@ import type {
   MigrationApplyRequest,
   MigrationApplyResponse,
   MigrationPreviewRequest,
+  MigrationTablePlan,
   MigrationPreviewResponse,
   EditableConstraintKind,
   SchemaFieldDraftRequest,
@@ -510,6 +511,9 @@ export class PostgresAdapter {
     configuration: PostgresConnectRequest,
     request: MigrationPreviewRequest,
   ): Promise<MigrationPreviewResponse> {
+    if (request.tablePlans?.length) {
+      return this.previewMigrationBatch(configuration, request.tablePlans);
+    }
     validatePostgresIdentifier(request.schema, 'schema');
     validatePostgresIdentifier(request.table, 'table');
     return this.withClient(configuration, async (client) => {
@@ -558,11 +562,29 @@ export class PostgresAdapter {
     });
   }
 
+  /** Previews multiple table plans together and orders their statements by DDL dependency phase. */
+  async previewMigrationBatch(
+    configuration: PostgresConnectRequest,
+    plans: MigrationTablePlan[],
+  ): Promise<MigrationPreviewResponse> {
+    return this.withClient(configuration, async (client) => {
+      const preview = await this.buildMigrationBatchPreview(client, plans);
+      return {
+        baselineFingerprint: plans[0]?.baselineFingerprint ?? null,
+        statements: preview.statements,
+        warnings: preview.warnings,
+      };
+    });
+  }
+
   /** Applies only statements matching the reviewed preview, atomically, then returns fresh snapshots. */
   async applyMigration(
     configuration: PostgresConnectRequest,
     request: MigrationApplyRequest,
   ): Promise<MigrationApplyResponse> {
+    if (request.tablePlans?.length) {
+      return this.applyMigrationBatch(configuration, request, request.tablePlans);
+    }
     validatePostgresIdentifier(request.schema, 'schema');
     validatePostgresIdentifier(request.table, 'table');
     return this.withClient(configuration, async (client) => {
@@ -675,6 +697,226 @@ export class PostgresAdapter {
         throw new MigrationPlanError('invalid', migrationDatabaseMessage(error));
       }
     });
+  }
+
+  /** Applies a dependency-planned set of table changes as one reviewed transaction. */
+  private async applyMigrationBatch(
+    configuration: PostgresConnectRequest,
+    request: MigrationApplyRequest,
+    plans: MigrationTablePlan[],
+  ): Promise<MigrationApplyResponse> {
+    return this.withClient(configuration, async (client) => {
+      await client.query('BEGIN');
+      let commitStarted = false;
+      try {
+        for (const plan of [...plans].sort((left, right) =>
+          `${left.schema}.${left.table}`.localeCompare(`${right.schema}.${right.table}`))) {
+          if (plan.baselineFingerprint === null) {
+            const tableNames = plan.operations.flatMap((operation) => operation.kind === 'createTable' ? [operation.table] : []);
+            for (const table of tableNames.sort()) {
+              await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`querydock:create:${plan.schema}.${table}`]);
+            }
+          } else {
+            await client.query(`LOCK TABLE ${quoteIdentifier(plan.schema)}.${quoteIdentifier(plan.table)} IN ACCESS EXCLUSIVE MODE`);
+          }
+        }
+        const generated = await this.buildMigrationBatchPreview(client, plans);
+        if (!sameStatements(generated.statements, request.reviewedStatements)) {
+          throw new MigrationPlanError('review-mismatch', 'The reviewed SQL no longer matches these table changes. Generate a new preview before applying.');
+        }
+        if (!sameStatements(generated.warnings, request.acknowledgedWarnings)) {
+          throw new MigrationPlanError('review-mismatch', 'Review and acknowledge the current migration warnings before applying.');
+        }
+
+        for (const statement of generated.statements) await client.query(statement);
+
+        const tableResults: NonNullable<MigrationApplyResponse['tableResults']> = [];
+        for (const plan of plans) {
+          const createOperations = plan.baselineFingerprint === null
+            ? plan.operations.filter((operation) => operation.kind === 'createTable') : [];
+          if (createOperations.length) {
+            for (const operation of createOperations) {
+              if (operation.kind !== 'createTable') continue;
+              const snapshot = await this.inspectTableWithClient(client, plan.schema, operation.table);
+              if (!snapshot) throw new MigrationPlanError('unknown', `The table "${operation.table}" was created, but its resulting structure could not be confirmed.`);
+              tableResults.push({ schema: plan.schema, table: operation.table, resultingTable: operation.table, snapshot });
+            }
+            continue;
+          }
+
+          const lifecycle = plan.operations.find((operation) => operation.kind === 'renameTable' || operation.kind === 'dropTable');
+          const resultingTable = lifecycle?.kind === 'dropTable'
+            ? null
+            : lifecycle?.kind === 'renameTable' ? lifecycle.newName : plan.table;
+          const snapshot = resultingTable
+            ? await this.inspectTableWithClient(client, plan.schema, resultingTable) ?? null
+            : null;
+          if (resultingTable && !snapshot) {
+            throw new MigrationPlanError('unknown', `The migration ran, but the resulting table "${resultingTable}" could not be confirmed.`);
+          }
+          tableResults.push({ schema: plan.schema, table: plan.table, resultingTable, snapshot });
+        }
+
+        commitStarted = true;
+        const commitResult = await client.query('COMMIT');
+        if (commitResult.command !== 'COMMIT') {
+          throw new MigrationPlanError('unknown', 'The server could not confirm that the migration transaction committed.');
+        }
+        return {
+          appliedStatements: generated.statements,
+          snapshots: tableResults.flatMap(({ snapshot }) => snapshot ? [snapshot] : []),
+          tableResults,
+        };
+      } catch (error) {
+        let rollbackConfirmed = false;
+        try {
+          await client.query('ROLLBACK');
+          rollbackConfirmed = true;
+        } catch {
+          // A lost connection can leave the transaction outcome uncertain.
+        }
+        if (error instanceof MigrationPlanError) throw error;
+        if (commitStarted || !rollbackConfirmed) {
+          throw new MigrationPlanError('unknown', 'The transaction outcome could not be confirmed. Inspect the database before retrying.');
+        }
+        throw new MigrationPlanError('invalid', migrationDatabaseMessage(error));
+      }
+    });
+  }
+
+  /** Validates table plans, detects unresolved foreign-key blockers, and orders generated DDL. */
+  private async buildMigrationBatchPreview(
+    client: Client,
+    plans: MigrationTablePlan[],
+  ): Promise<{ statements: string[]; warnings: string[] }> {
+    if (plans.length < 2 || plans.length > 50) {
+      throw new MigrationPlanError('invalid', 'A cross-table migration must contain between 2 and 50 table plans.');
+    }
+    if (plans.reduce((total, plan) => total + plan.operations.length, 0) > 150) {
+      throw new MigrationPlanError('invalid', 'A cross-table migration cannot contain more than 150 total operations. Split it into smaller reviewed batches.');
+    }
+    const planKeys = new Set<string>();
+    const snapshots = new Map<string, TableSnapshot | null>();
+    const statements: { sql: string; phase: number; order: number }[] = [];
+    const warnings: string[] = [];
+    let order = 0;
+
+    for (const plan of plans) {
+      validatePostgresIdentifier(plan.schema, 'schema');
+      validatePostgresIdentifier(plan.table, 'table');
+      const key = JSON.stringify([plan.schema, plan.table]);
+      if (planKeys.has(key)) throw new MigrationPlanError('invalid', `The table "${plan.schema}.${plan.table}" appears more than once in this runbook.`);
+      planKeys.add(key);
+      if (!plan.operations.length || plan.operations.some((operation) =>
+        operation.kind === 'updateDataRow' || operation.kind === 'insertDataRow' || operation.kind === 'deleteDataRow')) {
+        throw new MigrationPlanError('invalid', 'Cross-table batches support schema changes only. Keep data edits in a single-table runbook.');
+      }
+
+      if (plan.baselineFingerprint === null) {
+        if (plan.operations.some((operation) => operation.kind !== 'createTable')) {
+          throw new MigrationPlanError('invalid', 'A new-table plan must contain only create-table operations.');
+        }
+        snapshots.set(key, null);
+        const names = new Set<string>();
+        for (const operation of plan.operations) {
+          if (operation.kind !== 'createTable') continue;
+          validatePostgresIdentifier(operation.table, 'table');
+          if (names.has(operation.table)) throw new MigrationPlanError('invalid', `The table "${operation.table}" appears more than once in this runbook.`);
+          names.add(operation.table);
+          if (operation.ifNotExists && !this.schemaCapabilities().createTableIfNotExists) {
+            throw new MigrationPlanError('invalid', 'This database adapter does not support CREATE TABLE IF NOT EXISTS.');
+          }
+          await assertNewTableTarget(client, plan.schema, operation.table, operation.ifNotExists);
+          statements.push({
+            sql: createTableStatement(plan.schema, operation.table, operation.fields, operation.ifNotExists),
+            phase: 10,
+            order: order++,
+          });
+        }
+        warnings.push(...createTableWarnings(plan.schema, plan.operations));
+        continue;
+      }
+
+      if (plan.operations.some((operation) => operation.kind === 'createTable')) {
+        throw new MigrationPlanError('invalid', 'Create-table operations require a new-table baseline.');
+      }
+      validateTableLifecycleOperations(plan.operations);
+      const snapshot = await this.inspectTableWithClient(client, plan.schema, plan.table);
+      if (!snapshot) throw new MigrationPlanError('not-found', `The table "${plan.schema}.${plan.table}" was not found or is not visible.`);
+      if (snapshot.fingerprint !== plan.baselineFingerprint) {
+        throw new MigrationPlanError('drift', `The table "${plan.schema}.${plan.table}" changed since it was loaded. Refresh its schema before applying this batch.`);
+      }
+      snapshots.set(key, snapshot);
+      await validateForeignKeyTargets(client, snapshot, plan.operations);
+      await validateTableLifecycleTarget(client, snapshot, plan.operations);
+      for (const operation of plan.operations) {
+        const sql = createMigrationPreview(snapshot, { ...plan, operations: [operation] })[0];
+        if (!sql) continue;
+        statements.push({ sql, phase: migrationStatementPhase(operation, snapshot), order: order++ });
+      }
+      warnings.push(...collectMigrationWarnings(snapshot, plan.operations));
+    }
+
+    await this.validateMigrationBatchDependencies(client, plans, snapshots);
+    statements.sort((left, right) => left.phase - right.phase || left.order - right.order);
+    return { statements: statements.map(({ sql }) => sql), warnings: [...new Set(warnings)] };
+  }
+
+  /** Requires referenced foreign keys to be removed in the same batch before dropping their target. */
+  private async validateMigrationBatchDependencies(
+    client: Client,
+    plans: MigrationTablePlan[],
+    snapshots: Map<string, TableSnapshot | null>,
+  ): Promise<void> {
+    const plannedConstraintDrops = new Set(plans.flatMap((plan) => plan.operations.flatMap((operation) =>
+      operation.kind === 'dropConstraint' ? [JSON.stringify([plan.schema, plan.table, operation.name])] : [])));
+    const requireDependentForeignKeysDropped = async (
+      targetSchema: string,
+      targetTable: string,
+      targetConstraint?: string,
+    ): Promise<void> => {
+      const result = await client.query<{ schema: string; table: string; name: string }>(`
+        SELECT source_ns.nspname AS schema, source.relname AS table, foreign_key.conname AS name
+        FROM pg_catalog.pg_constraint AS foreign_key
+        JOIN pg_catalog.pg_class AS source ON source.oid = foreign_key.conrelid
+        JOIN pg_catalog.pg_namespace AS source_ns ON source_ns.oid = source.relnamespace
+        JOIN pg_catalog.pg_class AS target ON target.oid = foreign_key.confrelid
+        JOIN pg_catalog.pg_namespace AS target_ns ON target_ns.oid = target.relnamespace
+        ${targetConstraint ? 'JOIN pg_catalog.pg_constraint AS target_key ON target_key.conrelid = target.oid AND target_key.conindid = foreign_key.conindid' : ''}
+        WHERE foreign_key.contype = 'f' AND target_ns.nspname = $1 AND target.relname = $2
+          ${targetConstraint ? 'AND target_key.conname = $3' : ''}
+      `, targetConstraint ? [targetSchema, targetTable, targetConstraint] : [targetSchema, targetTable]);
+      const unresolved = result.rows.filter(({ schema, table, name }) =>
+        !plannedConstraintDrops.has(JSON.stringify([schema, table, name])));
+      if (unresolved.length) {
+        const refs = unresolved.slice(0, 5).map(({ schema, table, name }) => `${schema}.${table} (constraint "${name}")`).join(', ');
+        const object = targetConstraint
+          ? `constraint "${targetConstraint}" on ${targetSchema}.${targetTable}`
+          : `table ${targetSchema}.${targetTable}`;
+        throw new MigrationPlanError('invalid', `Cannot drop ${object} because it is referenced by ${refs}. Stage the foreign-key removals in the same runbook, then apply the batch.`);
+      }
+    };
+
+    for (const plan of plans) {
+      const snapshot = snapshots.get(JSON.stringify([plan.schema, plan.table]));
+      for (const operation of plan.operations) {
+        if (operation.kind === 'dropTable') {
+          await requireDependentForeignKeysDropped(plan.schema, plan.table);
+        } else if (operation.kind === 'dropConstraint' && snapshot) {
+          const constraint = snapshot.constraints.find(({ name }) => name === operation.name);
+          if (constraint?.kind === 'primaryKey' || constraint?.kind === 'unique') {
+            await requireDependentForeignKeysDropped(plan.schema, plan.table, operation.name);
+          }
+        } else if (operation.kind === 'addConstraint' && operation.constraintKind === 'foreignKey') {
+          const targetPlan = plans.find((candidate) => candidate.schema === operation.referencedSchema
+            && candidate.operations.some((candidateOperation) => candidateOperation.kind === 'dropTable'
+              && candidate.table === operation.referencedTable));
+          if (targetPlan) {
+            throw new MigrationPlanError('invalid', `The foreign key "${operation.name}" references ${operation.referencedSchema}.${operation.referencedTable}, which this batch drops. Remove the conflicting change or keep the target table.`);
+          }
+        }
+      }
+    }
   }
 
   /** Reads relation, column, constraint, and privilege metadata using an existing client. */
@@ -1632,6 +1874,23 @@ export function collectMigrationWarnings(snapshot: TableSnapshot, operations: Sc
     }
   }
   return warnings;
+}
+
+/** Assigns stable dependency phases so FK removals precede key/table drops and FK additions follow key creation. */
+function migrationStatementPhase(operation: SchemaOperation, snapshot: TableSnapshot): number {
+  switch (operation.kind) {
+    case 'dropConstraint': {
+      const constraint = snapshot.constraints.find(({ name }) => name === operation.name);
+      return constraint?.kind === 'foreignKey' ? 0 : 20;
+    }
+    case 'createTable': return 10;
+    case 'addNullableField':
+    case 'alterField': return 30;
+    case 'addConstraint': return operation.constraintKind === 'foreignKey' ? 50 : 40;
+    case 'renameTable': return 60;
+    case 'dropTable': return 70;
+    default: return 80;
+  }
 }
 
 /** Enforces that table rename and drop operations run as their own batch. */

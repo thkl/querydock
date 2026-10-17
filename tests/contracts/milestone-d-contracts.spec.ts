@@ -37,4 +37,22 @@ describe('Milestone D shared contracts', () => {
     expect(migrationApplyResponseSchema.safeParse({ appliedStatements: ['DROP TABLE "public"."users";'], snapshots: [] }).success)
       .toBe(true);
   });
+
+  it('accepts atomic cross-table schema plans and per-table apply results', () => {
+    const plans = [
+      { schema: 'public', table: 'children', baselineFingerprint: 'a'.repeat(64),
+        operations: [{ kind: 'dropConstraint', name: 'fk_children_parents' }] },
+      { schema: 'public', table: 'parents', baselineFingerprint: 'b'.repeat(64),
+        operations: [{ kind: 'dropTable' }] },
+    ];
+    expect(migrationPreviewRequestSchema.safeParse({ ...plans[0], tablePlans: plans }).success).toBe(true);
+    expect(migrationApplyResponseSchema.safeParse({
+      appliedStatements: ['ALTER TABLE children DROP CONSTRAINT fk_children_parents', 'DROP TABLE parents'],
+      snapshots: [],
+      tableResults: [
+        { schema: 'public', table: 'children', resultingTable: 'children', snapshot: null },
+        { schema: 'public', table: 'parents', resultingTable: null, snapshot: null },
+      ],
+    }).success).toBe(true);
+  });
 });

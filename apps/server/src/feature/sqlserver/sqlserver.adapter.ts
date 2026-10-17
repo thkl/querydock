@@ -240,6 +240,9 @@ export class SqlServerAdapter {
 
   /** Converts the shared migration preview API into a SQL Server data-only preview. */
   async previewMigration(configuration: SqlServerConnectRequest, request: MigrationPreviewRequest): Promise<MigrationPreviewResponse> {
+    if (request.tablePlans?.length) {
+      throw new MigrationPlanError('invalid', 'Cross-table schema migration batches are not supported by the SQL Server adapter yet.');
+    }
     const operations = request.operations.filter(isDataOperation);
     if (operations.length !== request.operations.length) {
       throw new MigrationPlanError('invalid', 'SQL Server schema editing is not enabled yet. This adapter currently supports data Runbook operations only.');
@@ -253,6 +256,9 @@ export class SqlServerAdapter {
 
   /** Applies only reviewed data operations atomically and returns the current inspected snapshot. */
   async applyMigration(configuration: SqlServerConnectRequest, request: MigrationApplyRequest): Promise<MigrationApplyResponse> {
+    if (request.tablePlans?.length) {
+      throw new MigrationPlanError('invalid', 'Cross-table schema migration batches are not supported by the SQL Server adapter yet.');
+    }
     validateIdentifier(request.schema, 'schema');
     validateIdentifier(request.table, 'table');
     const operations = request.operations.filter(isDataOperation);

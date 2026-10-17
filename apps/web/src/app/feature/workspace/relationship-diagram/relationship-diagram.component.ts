@@ -712,26 +712,30 @@ export class RelationshipDiagramComponent {
     const relationships = snapshots.flatMap((snapshot) => snapshot.constraints
       .filter((constraint) => constraint.kind === 'foreignKey')
       .map((constraint) => this.toRelationship(snapshot, constraint, false)));
-    if (!current?.baseline) return relationships;
-    const baselineKey = this.tableKey(current.schema, current.table);
-    for (const operation of current.operations) {
-      if (operation.kind === 'dropConstraint') {
-        const index = relationships.findIndex((relation) => this.tableKey(relation.sourceSchema, relation.sourceTable) === baselineKey
-          && relation.name === operation.name);
-        if (index >= 0) relationships.splice(index, 1);
-      } else if (operation.kind === 'addConstraint' && operation.constraintKind === 'foreignKey') {
-        relationships.push({
-          id: this.relationshipKey(current.schema, current.table, operation.name),
-          sourceSchema: current.schema,
-          sourceTable: current.table,
-          name: operation.name,
-          fieldNames: operation.fieldNames,
-          referencedSchema: operation.referencedSchema,
-          referencedTable: operation.referencedTable,
-          referencedFieldNames: operation.referencedFieldNames,
-          editable: current.baseline.canAlter,
-          pending: true,
-        });
+    if (!current) return relationships;
+    for (const change of current.tableChanges ?? (current.operations.length
+      ? [{ schema: current.schema, table: current.table, baseline: current.baseline, operations: current.operations }]
+      : [])) {
+      const baselineKey = this.tableKey(change.schema, change.table);
+      for (const operation of change.operations) {
+        if (operation.kind === 'dropConstraint') {
+          const index = relationships.findIndex((relation) => this.tableKey(relation.sourceSchema, relation.sourceTable) === baselineKey
+            && relation.name === operation.name);
+          if (index >= 0) relationships.splice(index, 1);
+        } else if (operation.kind === 'addConstraint' && operation.constraintKind === 'foreignKey') {
+          relationships.push({
+            id: this.relationshipKey(change.schema, change.table, operation.name),
+            sourceSchema: change.schema,
+            sourceTable: change.table,
+            name: operation.name,
+            fieldNames: operation.fieldNames,
+            referencedSchema: operation.referencedSchema,
+            referencedTable: operation.referencedTable,
+            referencedFieldNames: operation.referencedFieldNames,
+            editable: change.baseline?.canAlter ?? false,
+            pending: true,
+          });
+        }
       }
     }
     return relationships.sort((left, right) => left.sourceSchema.localeCompare(right.sourceSchema)
@@ -757,9 +761,14 @@ export class RelationshipDiagramComponent {
   /** Finds original constraints that must be dropped when a staged key replaces them. */
   private pendingOriginalDrops(source: TableSnapshot, pendingName: string): Extract<SchemaOperation, { kind: 'dropConstraint' }>[] {
     const current = this.runbook.runbook();
-    if (!current || this.tableKey(current.schema, current.table) !== this.tableKey(source.schema, source.name)) return [];
+    if (!current) return [];
+    const change = current.tableChanges?.find(({ schema, table }) => schema === source.schema && table === source.name)
+      ?? (current.schema === source.schema && current.table === source.name
+        ? { operations: current.operations }
+        : null);
+    if (!change) return [];
     const actualForeignKeys = new Set(source.constraints.filter(({ kind }) => kind === 'foreignKey').map(({ name }) => name));
-    const candidates = current.operations.filter((operation): operation is Extract<SchemaOperation, { kind: 'dropConstraint' }> =>
+    const candidates = change.operations.filter((operation): operation is Extract<SchemaOperation, { kind: 'dropConstraint' }> =>
       operation.kind === 'dropConstraint' && actualForeignKeys.has(operation.name));
     const sameName = candidates.filter(({ name }) => name === pendingName);
     if (sameName.length === 1) return sameName;

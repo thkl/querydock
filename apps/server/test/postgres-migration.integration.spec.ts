@@ -21,7 +21,7 @@ const requireFromServer = createRequire(resolve(process.cwd(), 'apps/server/pack
 const { Client } = requireFromServer('pg') as { Client: PgClientConstructor };
 const databaseUrl = process.env.QUERYDOCK_TEST_DATABASE_URL;
 
-describe.skipIf(!databaseUrl)('PostgreSQL Milestone D integration (disposable database)', () => {
+describe.skipIf(!databaseUrl)('PostgreSQL migration integration (disposable database)', () => {
   const adapter = new PostgresAdapter();
   let admin: PgClient;
   let schema: string;
@@ -168,6 +168,43 @@ describe.skipIf(!databaseUrl)('PostgreSQL Milestone D integration (disposable da
       reviewedStatements: restrictedDrop.statements, acknowledgedWarnings: restrictedDrop.warnings,
     })).rejects.toBeInstanceOf(MigrationPlanError);
     expect(await adapter.inspectTable(configuration, schema, 'parent')).toBeDefined();
+
+    const parentDropBaseline = await adapter.inspectTable(configuration, schema, 'parent');
+    const childFkDropBaseline = await adapter.inspectTable(configuration, schema, 'child');
+    if (!parentDropBaseline || !childFkDropBaseline) throw new Error('The dependency fixture tables disappeared.');
+    await expect(adapter.previewMigration(configuration, {
+      schema, table: 'parent', baselineFingerprint: parentDropBaseline.fingerprint,
+      operations: [{ kind: 'dropTable' }],
+      tablePlans: [
+        { schema, table: 'parent', baselineFingerprint: parentDropBaseline.fingerprint, operations: [{ kind: 'dropTable' }] },
+        { schema, table: 'child', baselineFingerprint: childFkDropBaseline.fingerprint,
+          operations: [{ kind: 'addNullableField', name: 'dependency_probe', type: 'text' }] },
+      ],
+    })).rejects.toMatchObject({ kind: 'invalid', message: expect.stringContaining('child_parent_fk') });
+    const dependencyPlans: MigrationPreviewRequest['tablePlans'] = [
+      { schema, table: 'child', baselineFingerprint: childFkDropBaseline.fingerprint,
+        operations: [{ kind: 'dropConstraint', name: 'child_parent_fk' }] },
+      { schema, table: 'parent', baselineFingerprint: parentDropBaseline.fingerprint,
+        operations: [{ kind: 'dropTable' }] },
+    ];
+    const dependencyRequest: MigrationPreviewRequest = {
+      ...dependencyPlans[0]!, tablePlans: dependencyPlans,
+    };
+    const dependencyPreview = await adapter.previewMigration(configuration, dependencyRequest);
+    expect(dependencyPreview.statements).toHaveLength(2);
+    expect(dependencyPreview.statements[0]).toContain('DROP CONSTRAINT "child_parent_fk"');
+    expect(dependencyPreview.statements[1]).toContain('DROP TABLE');
+    const dependencyResult = await adapter.applyMigration(configuration, {
+      ...dependencyRequest,
+      reviewedStatements: dependencyPreview.statements,
+      acknowledgedWarnings: dependencyPreview.warnings,
+    });
+    expect(dependencyResult.tableResults).toEqual(expect.arrayContaining([
+      expect.objectContaining({ schema, table: 'parent', resultingTable: null, snapshot: null }),
+      expect.objectContaining({ schema, table: 'child', resultingTable: 'child', snapshot: expect.objectContaining({ name: 'child' }) }),
+    ]));
+    expect(await adapter.inspectTable(configuration, schema, 'parent')).toBeUndefined();
+    expect((await adapter.inspectTable(configuration, schema, 'child'))?.constraints.some(({ name }) => name === 'child_parent_fk')).toBe(false);
 
     const rename = await adapter.inspectTable(configuration, schema, 'child');
     if (!rename) throw new Error('The child table disappeared before rename.');

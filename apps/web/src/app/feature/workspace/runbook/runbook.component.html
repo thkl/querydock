@@ -27,10 +27,8 @@
         <code>{{ state.schema }}.{{ state.table }}</code>
       } @else {
         <div class="runbook-tables" aria-label="Tables in this runbook">
-          @for (operation of state.operations; track operation.kind === 'createTable' ? operation.table : $index) {
-            @if (operation.kind === 'createTable') {
-              <code>{{ state.schema }}.{{ operation.table }}{{ operation.ifNotExists ? ' · if missing' : '' }}</code>
-            }
+          @for (change of changesFor(state); track change.schema + '.' + change.table) {
+            <code>{{ change.schema }}.{{ change.table }} · {{ change.operations.length }} pending</code>
           }
         </div>
       }
@@ -44,6 +42,15 @@
           <button class="subtle-button" type="button" [disabled]="runbook.reconciling()" (click)="resolveUnknown('notApplied')">I verified it was not applied</button>
         </div>
       </div>
+    }
+
+    @if (changesFor(state).length > 1) {
+      <section class="runbook-target" aria-label="Tables included in this migration batch">
+        <span>Atomic migration batch</span>
+        @for (change of changesFor(state); track change.schema + '.' + change.table) {
+          <code>{{ change.schema }}.{{ change.table }} · {{ change.operations.length }} changes</code>
+        }
+      </section>
     }
 
     @if (state.appliedBatches.length) {
@@ -75,7 +82,7 @@
       }
       <footer class="preview-status">
         <span>{{ state.preview?.statements?.length ?? 0 }} pending statements</span>
-        <span>{{ state.lastAppliedTableAction === 'dropped' ? 'Table drop confirmed' : state.baseline ? 'Baseline ' + state.baseline.fingerprint.slice(0, 12) : (state.operations.length > 1 ? 'New tables' : 'New table') }} · {{ state.operations.length ? 'not executed' : 'complete' }}</span>
+        <span>{{ state.lastAppliedTableAction === 'dropped' ? 'Table drop confirmed' : state.baseline ? 'Baseline ' + state.baseline.fingerprint.slice(0, 12) : (state.operations.length > 1 ? 'New tables' : 'New table') }} · {{ runbook.pendingOperationCount() ? 'not executed' : 'complete' }}</span>
       </footer>
     </section>
 
@@ -84,7 +91,7 @@
         <a class="subtle-button" [routerLink]="['/tables', state.table, 'schema']" [queryParams]="{ schema: state.schema }">Back to table</a>
       }
       <div class="runbook-action-group">
-        @if (state.operations.length) {
+      @if (runbook.pendingOperationCount()) {
           <button class="subtle-button" type="button" [disabled]="runbook.applying() || state.applyOutcomeUnknown" (click)="discard()">Discard pending</button>
         }
         @if (runbook.appliedStatements().length) {

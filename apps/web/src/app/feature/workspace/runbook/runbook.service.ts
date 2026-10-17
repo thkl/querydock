@@ -4,6 +4,7 @@ import type {
   ConnectionTarget,
   CreateTableField,
   MigrationApplyRequest,
+  MigrationTablePlan,
   MigrationPreviewResponse,
   DataRunbookPreviewRequest,
   SchemaFieldDraftRequest,
@@ -21,10 +22,19 @@ export interface SchemaRunbook {
   table: string;
   baseline: TableSnapshot | null;
   operations: SchemaOperation[];
+  /** Per-table draft plans; absent in older browser-stored runbooks. */
+  tableChanges?: SchemaRunbookTableChange[];
   preview: MigrationPreviewResponse | null;
   appliedBatches: { statements: string[]; appliedAt: string }[];
   applyOutcomeUnknown: boolean;
   lastAppliedTableAction?: 'dropped';
+}
+
+export interface SchemaRunbookTableChange {
+  schema: string;
+  table: string;
+  baseline: TableSnapshot | null;
+  operations: SchemaOperation[];
 }
 
 const DATABASE_NAME = 'querydock-browser-state';
@@ -41,13 +51,14 @@ export class RunbookService {
     const target = this.connections.activeConnection()?.target;
     return target ? this.runbooksByConnection().get(runbookKey(target)) ?? null : null;
   });
-  readonly pendingOperationCount = computed(() => this.runbook()?.operations.length ?? 0);
+  readonly pendingOperationCount = computed(() => this.runbook()?.tableChanges?.reduce((total, plan) => total + plan.operations.length, 0)
+    ?? this.runbook()?.operations.length ?? 0);
   readonly noticeLabel = computed(() => {
     const current = this.runbook();
     if (!current) return null;
     if (this.applying()) return 'Applying runbook…';
     if (current.applyOutcomeUnknown) return 'Runbook outcome unknown · Review';
-    const count = current.operations.length;
+    const count = current.tableChanges?.reduce((total, plan) => total + plan.operations.length, 0) ?? current.operations.length;
     return count ? `${count} uncommitted ${count === 1 ? 'change' : 'changes'} · Review runbook` : null;
   });
   readonly previewing = signal(false);
@@ -57,7 +68,7 @@ export class RunbookService {
   readonly storageAvailable = signal(true);
   readonly canApply = computed(() => {
     const current = this.runbook();
-    return Boolean(current?.preview && current.operations.length && !current.applyOutcomeUnknown
+    return Boolean(current?.preview && this.pendingOperationCount() && !current.applyOutcomeUnknown
       && this.matchingConnection(current.target));
   });
   readonly previewSql = computed(() => {
@@ -71,16 +82,16 @@ export class RunbookService {
   /** Returns row-key identities marked for deletion while staged deletes await Apply. */
   pendingDeletedRowIdentities(connection: ConnectResponse, schema: string, table: string): ReadonlySet<string> {
     const current = this.runbookForTarget(connection.target);
-    if (!current || !sameRunbookResource(current, connection.target, schema, table)) return new Set();
-    return new Set(current.operations.flatMap((operation) => operation.kind === 'deleteDataRow'
+    if (!current) return new Set();
+    return new Set(this.operationsForResource(current, schema, table).flatMap((operation) => operation.kind === 'deleteDataRow'
       ? [rowKeyIdentity(operation.key)] : []));
   }
 
   /** Returns staged inserts for restoring their draft rows when the data page is reopened. */
   pendingDataRowInserts(connection: ConnectResponse, schema: string, table: string): TableDataRowInsert[] {
     const current = this.runbookForTarget(connection.target);
-    if (!current || !sameRunbookResource(current, connection.target, schema, table)) return [];
-    return current.operations.flatMap((operation) => operation.kind === 'insertDataRow'
+    if (!current) return [];
+    return this.operationsForResource(current, schema, table).flatMap((operation) => operation.kind === 'insertDataRow'
       ? [{ draftId: operation.draftId, values: operation.values }]
       : []);
   }
@@ -88,10 +99,22 @@ export class RunbookService {
   /** Returns staged row updates so the data grid can restore their draft values after navigation. */
   pendingDataRowUpdates(connection: ConnectResponse, schema: string, table: string): TableDataRowUpdate[] {
     const current = this.runbookForTarget(connection.target);
-    if (!current || !sameRunbookResource(current, connection.target, schema, table)) return [];
-    return current.operations.flatMap((operation) => operation.kind === 'updateDataRow'
+    if (!current) return [];
+    return this.operationsForResource(current, schema, table).flatMap((operation) => operation.kind === 'updateDataRow'
       ? [{ key: operation.key, expectedVersion: operation.expectedVersion, changes: operation.changes }]
       : []);
+  }
+
+  /** Returns staged operations belonging to one table, including dependency-batch plans. */
+  operationsForResource(runbook: SchemaRunbook, schema: string, table: string): SchemaOperation[] {
+    const changes = this.tableChangesOf(runbook);
+    return changes.find((plan) => plan.schema === schema && plan.table === table)?.operations ?? [];
+  }
+
+  /** Returns the table plan held by the active database runbook, if one exists. */
+  tableChangeForResource(schema: string, table: string): SchemaRunbookTableChange | null {
+    const current = this.runbook();
+    return current ? this.tableChangesOf(current).find((plan) => plan.schema === schema && plan.table === table) ?? null : null;
   }
 
   /** Replaces or removes a staged field operation using a fresh server preview. */
@@ -104,22 +127,24 @@ export class RunbookService {
     await this.ready;
     this.error.set(null);
     const current = this.runbookForTarget(connection.target);
-    const currentMatches = current && sameRunbookResource(current, connection.target, snapshot.schema, snapshot.name);
+    const changes = current ? this.tableChangesOf(current) : [];
+    const planIndex = changes.findIndex(({ schema, table }) => schema === snapshot.schema && table === snapshot.name);
+    const existingPlan = planIndex >= 0 ? changes[planIndex] : null;
     if (current?.applyOutcomeUnknown) {
       throw new Error('The previous Apply outcome is unknown. Inspect the database before staging or applying more changes.');
     }
-    if (current?.operations.some((operation) => operation.kind === 'renameTable' || operation.kind === 'dropTable')) {
-      throw new Error('Apply or discard the pending table rename/drop before staging field changes.');
+    if (existingPlan?.operations.some((operation) => operation.kind === 'renameTable' || operation.kind === 'dropTable')) {
+      throw new Error('Apply or discard the pending table rename/drop before staging field changes for that table.');
     }
-    if (current?.operations.length && !currentMatches) {
-      throw new Error('This database runbook has pending changes for another table. Apply or clear those changes before staging a different table.');
+    if (changes.some((plan) => plan.operations.some(isDataOperation))) {
+      throw new Error('Apply or discard pending data changes before staging schema changes in this runbook.');
     }
-
-    const baseline = currentMatches ? current?.baseline ?? snapshot : snapshot;
+    const baseline = existingPlan?.baseline ?? snapshot;
+    const existingOperations = existingPlan?.operations ?? [];
     const key = draft.sourceName ?? replacementName ?? draft.name;
     const matches = (candidate: SchemaOperation): boolean =>
       (candidate.kind === 'addNullableField' || candidate.kind === 'alterField') && candidate.name === key;
-    const retained = (current?.operations ?? []).filter((candidate) =>
+    const retained = existingOperations.filter((candidate) =>
       !(candidate.kind === 'addNullableField' || candidate.kind === 'alterField') || !matches(candidate));
     const request: SchemaFieldDraftRequest = {
       schema: baseline.schema,
@@ -132,25 +157,23 @@ export class RunbookService {
     this.previewing.set(true);
     try {
       const fieldPreview = await this.connections.previewSchemaFieldDraft(connection.connectionId, request);
-      if (!fieldPreview.operations.length) {
-        if (current) {
-          const updated = { ...current, operations: [], preview: null };
-          this.setRunbookForTarget(connection.target, updated);
-          await this.persist(updated);
-        }
-        return;
-      }
-      const { operations, ...preview } = fieldPreview;
-      const runbook: SchemaRunbook = {
-        target: connection.target,
+      const nextOperations = fieldPreview.operations;
+      const nextChanges = this.replaceTableChange(changes, {
         schema: baseline.schema,
         table: baseline.name,
         baseline,
-        operations,
-        preview,
-        appliedBatches: current?.appliedBatches ?? [],
-        applyOutcomeUnknown: false,
-      };
+        operations: nextOperations,
+      });
+      if (!fieldPreview.operations.length) {
+        if (!nextChanges.length && !current) return;
+        const preview = await this.previewTableChanges(connection.connectionId, nextChanges);
+        const updated = this.runbookWithTableChanges(current, connection.target, nextChanges, preview);
+        this.setRunbookForTarget(connection.target, updated);
+        await this.persist(updated);
+        return;
+      }
+      const preview = await this.previewTableChanges(connection.connectionId, nextChanges);
+      const runbook = this.runbookWithTableChanges(current, connection.target, nextChanges, preview);
       this.setRunbookForTarget(connection.target, runbook);
       await this.persist(runbook);
     } catch (error) {
@@ -239,26 +262,27 @@ export class RunbookService {
     await this.ready;
     this.error.set(null);
     const current = this.runbookForTarget(connection.target);
-    const matches = current && sameRunbookResource(current, connection.target, snapshot.schema, snapshot.name);
+    const changes = current ? this.tableChangesOf(current) : [];
+    const existingPlan = changes.find(({ schema, table }) => schema === snapshot.schema && table === snapshot.name) ?? null;
     if (current?.applyOutcomeUnknown) throw new Error('Reconcile the previous Apply outcome before staging another change.');
-    if (current?.operations.length && !matches) {
-      throw new Error('This database runbook has pending changes for another table. Apply or clear them first.');
+    if (changes.some((plan) => plan.operations.some(isDataOperation))) {
+      throw new Error('Apply or discard pending data changes before staging table schema changes.');
     }
-    if (current?.operations.length && current.operations.some((candidate) =>
+    if (existingPlan?.operations.length && existingPlan.operations.some((candidate) =>
       candidate.kind !== 'renameTable' && candidate.kind !== 'dropTable')) {
       throw new Error('Apply or discard the pending field and constraint changes before renaming or dropping this table.');
     }
-    const baseline = matches ? current?.baseline ?? snapshot : snapshot;
+    const baseline = existingPlan?.baseline ?? snapshot;
+    const nextChanges = this.replaceTableChange(changes, {
+      schema: baseline.schema,
+      table: baseline.name,
+      baseline,
+      operations: [operation],
+    });
     this.previewing.set(true);
     try {
-      const operations: SchemaOperation[] = [operation];
-      const preview = await this.connections.previewMigration(connection.connectionId, {
-        schema: baseline.schema, table: baseline.name, baselineFingerprint: baseline.fingerprint, operations,
-      });
-      const updated: SchemaRunbook = {
-        target: connection.target, schema: baseline.schema, table: baseline.name, baseline, operations, preview,
-        appliedBatches: current?.appliedBatches ?? [], applyOutcomeUnknown: false,
-      };
+      const preview = await this.previewTableChanges(connection.connectionId, nextChanges);
+      const updated = this.runbookWithTableChanges(current, connection.target, nextChanges, preview);
       this.setRunbookForTarget(connection.target, updated);
       await this.persist(updated);
     } catch (error) {
@@ -316,48 +340,42 @@ export class RunbookService {
     await this.ready;
     this.error.set(null);
     const current = this.runbookForTarget(connection.target);
-    const currentMatches = current && sameRunbookResource(current, connection.target, snapshot.schema, snapshot.name);
+    const changes = current ? this.tableChangesOf(current) : [];
+    const planIndex = changes.findIndex(({ schema, table }) => schema === snapshot.schema && table === snapshot.name);
+    const existingPlan = planIndex >= 0 ? changes[planIndex] : null;
     if (current?.applyOutcomeUnknown) {
       throw new Error('The previous Apply outcome is unknown. Inspect the database before staging or applying more changes.');
     }
-    if (current?.operations.some((operation) => operation.kind === 'renameTable' || operation.kind === 'dropTable')) {
-      throw new Error('Apply or discard the pending table rename/drop before adding a new table draft.');
+    if (changes.some((plan) => plan.operations.some(isDataOperation))) {
+      throw new Error('Apply or discard pending data changes before staging schema changes in this runbook.');
     }
-    if (current?.operations.length && !currentMatches) {
-      throw new Error('This database runbook has pending changes for another table. Apply or clear those changes before staging a different table.');
+    if (existingPlan?.operations.some((candidate) => candidate.kind === 'renameTable' || candidate.kind === 'dropTable')) {
+      throw new Error('Apply or discard the pending table rename/drop before staging constraints for that table.');
     }
 
-    const baseline = currentMatches ? current?.baseline ?? snapshot : snapshot;
-    const retained = (current?.operations ?? []).filter((candidate) =>
+    const baseline = existingPlan?.baseline ?? snapshot;
+    const retained = (existingPlan?.operations ?? []).filter((candidate) =>
       !(candidate.kind === 'addConstraint' || candidate.kind === 'dropConstraint') || !replacementNames.includes(candidate.name));
     const operations = [...retained, ...replacements];
+    const nextChanges = this.replaceTableChange(changes, {
+      schema: baseline.schema,
+      table: baseline.name,
+      baseline,
+      operations,
+    });
     if (!operations.length) {
-      if (current) {
-        const updated = { ...current, operations: [], preview: null };
-        this.setRunbookForTarget(connection.target, updated);
-        await this.persist(updated);
-      }
+      if (!nextChanges.length && !current) return;
+      const preview = await this.previewTableChanges(connection.connectionId, nextChanges);
+      const updated = this.runbookWithTableChanges(current, connection.target, nextChanges, preview);
+      this.setRunbookForTarget(connection.target, updated);
+      await this.persist(updated);
       return;
     }
 
     this.previewing.set(true);
     try {
-      const preview = await this.connections.previewMigration(connection.connectionId, {
-        schema: baseline.schema,
-        table: baseline.name,
-        baselineFingerprint: baseline.fingerprint,
-        operations,
-      });
-      const runbook: SchemaRunbook = {
-        target: connection.target,
-        schema: baseline.schema,
-        table: baseline.name,
-        baseline,
-        operations,
-        preview,
-        appliedBatches: current?.appliedBatches ?? [],
-        applyOutcomeUnknown: false,
-      };
+      const preview = await this.previewTableChanges(connection.connectionId, nextChanges);
+      const runbook = this.runbookWithTableChanges(current, connection.target, nextChanges, preview);
       this.setRunbookForTarget(connection.target, runbook);
       await this.persist(runbook);
     } catch (error) {
@@ -380,6 +398,7 @@ export class RunbookService {
     const current = this.runbookForTarget(connection.target);
     const matches = current && sameRunbookResource(current, connection.target, schema, table);
     if (current?.applyOutcomeUnknown) throw new Error('The previous Apply outcome is unknown. Inspect the database before staging or applying more changes.');
+    this.assertDataOperationCanBeStaged(current, schema, table);
     if (current?.operations.length && !matches) {
       throw new Error('This database runbook has pending changes for another table. Apply or clear those changes before staging a row edit.');
     }
@@ -432,6 +451,7 @@ export class RunbookService {
     const current = this.runbookForTarget(connection.target);
     const matches = current && sameRunbookResource(current, connection.target, schema, table);
     if (current?.applyOutcomeUnknown) throw new Error('The previous Apply outcome is unknown. Inspect the database before staging or applying more changes.');
+    this.assertDataOperationCanBeStaged(current, schema, table);
     if (current?.operations.length && !matches) {
       throw new Error('This database runbook has pending changes for another table. Apply or clear those changes before staging a row.');
     }
@@ -514,6 +534,7 @@ export class RunbookService {
     const current = this.runbookForTarget(connection.target);
     const matches = current && sameRunbookResource(current, connection.target, schema, table);
     if (current?.applyOutcomeUnknown) throw new Error('The previous Apply outcome is unknown. Inspect the database before staging or applying more changes.');
+    this.assertDataOperationCanBeStaged(current, schema, table);
     if (current?.operations.length && !matches) {
       throw new Error('This database runbook has pending changes for another table. Apply or clear those changes before staging a row delete.');
     }
@@ -557,16 +578,21 @@ export class RunbookService {
   async applyPending(acknowledgedWarnings: string[] = []): Promise<void> {
     await this.ready;
     const current = this.runbook();
-    if (!current?.preview || !current.operations.length) throw new Error('There is no reviewed SQL to apply.');
+    const tableChanges = current ? this.tableChangesOf(current) : [];
+    if (!current?.preview || !tableChanges.length) throw new Error('There is no reviewed SQL to apply.');
     if (current.applyOutcomeUnknown) throw new Error('This batch has an unknown outcome and cannot be applied again automatically.');
     const connection = this.matchingConnection(current.target);
     if (!connection) throw new Error('Connect to the runbook target database before applying.');
 
+    const tablePlans: MigrationTablePlan[] = tableChanges.map(({ schema, table, baseline, operations }) => ({
+      schema,
+      table,
+      baselineFingerprint: baseline?.fingerprint ?? null,
+      operations,
+    }));
     const plan: MigrationApplyRequest = {
-      schema: current.schema,
-      table: current.table,
-      baselineFingerprint: current.baseline?.fingerprint ?? null,
-      operations: current.operations,
+      ...tablePlans[0]!,
+      ...(tablePlans.length > 1 ? { tablePlans } : {}),
       reviewedStatements: current.preview.statements,
       acknowledgedWarnings,
     };
@@ -579,21 +605,28 @@ export class RunbookService {
     try {
       const result = await this.connections.applyMigration(connection.connectionId, plan);
       serverConfirmedApply = true;
-      const tableAction = current.operations[0];
-      const isDropped = tableAction?.kind === 'dropTable';
-      const isRenamed = tableAction?.kind === 'renameTable';
-      if (current.baseline === null || isDropped || isRenamed) {
+      const hasLifecycle = tableChanges.some(({ operations }) =>
+        operations.some((operation) => operation.kind === 'createTable' || operation.kind === 'renameTable' || operation.kind === 'dropTable'));
+      if (hasLifecycle) {
         await this.refreshAndConfirmTableChanges(connection.connectionId, current);
       }
+      const primaryResult = result.tableResults?.find(({ schema, table }) =>
+        schema === current.schema && table === current.table);
+      const primaryLifecycle = tableChanges[0]?.operations.find((operation) =>
+        operation.kind === 'renameTable' || operation.kind === 'dropTable');
+      const resultingTable = primaryResult?.resultingTable
+        ?? (primaryLifecycle?.kind === 'renameTable' ? primaryLifecycle.newName : current.table);
+      const isDropped = primaryResult?.resultingTable === null || primaryLifecycle?.kind === 'dropTable';
       const updated: SchemaRunbook = {
         ...current,
-        table: isRenamed ? tableAction.newName : current.table,
-        baseline: current.baseline === null ? null : isDropped ? null : result.snapshots[0],
+        table: resultingTable,
+        baseline: primaryResult?.snapshot ?? (isDropped ? null : result.snapshots[0] ?? current.baseline),
         operations: [],
+        tableChanges: [],
         preview: null,
         appliedBatches: [...current.appliedBatches, { statements: result.appliedStatements, appliedAt: new Date().toISOString() }],
         applyOutcomeUnknown: false,
-        lastAppliedTableAction: isDropped ? 'dropped' : undefined,
+        lastAppliedTableAction: isDropped && tableChanges.length === 1 ? 'dropped' : undefined,
       };
       this.setRunbookForTarget(current.target, updated);
       await this.persist(updated);
@@ -615,15 +648,23 @@ export class RunbookService {
     const current = this.runbook();
     if (!current || current.applyOutcomeUnknown) return;
     const connection = this.matchingConnection(current.target);
-    let baseline = current.baseline;
-    if (connection && baseline) {
-      try {
-        baseline = await this.connections.inspectTable(connection.connectionId, current.schema, current.table);
-      } catch {
-        // Keep the stored baseline if the database cannot be reached right now.
+    const tableChanges = this.tableChangesOf(current);
+    const refreshed: SchemaRunbookTableChange[] = [];
+    for (const change of tableChanges) {
+      let baseline = change.baseline;
+      if (connection && baseline) {
+        try { baseline = await this.connections.inspectTable(connection.connectionId, change.schema, change.table); }
+        catch { /* Keep the stored baseline when the database cannot be reached. */ }
       }
+      refreshed.push({ ...change, baseline });
     }
-    const updated = { ...current, baseline, operations: [], preview: null };
+    const updated = {
+      ...current,
+      baseline: refreshed[0]?.baseline ?? current.baseline,
+      operations: [],
+      tableChanges: [],
+      preview: null,
+    };
     this.setRunbookForTarget(current.target, updated);
     this.error.set(null);
     await this.persist(updated);
@@ -649,6 +690,11 @@ export class RunbookService {
   private async reconcileUnknownApply(outcome: 'applied' | 'notApplied'): Promise<void> {
     const current = this.runbook();
     if (!current?.applyOutcomeUnknown || !current.preview) return;
+    const tableChanges = this.tableChangesOf(current);
+    if (tableChanges.length > 1) {
+      await this.reconcileUnknownBatch(current, tableChanges, outcome);
+      return;
+    }
     const connection = this.matchingConnection(current.target);
     if (!connection) throw new Error('Reconnect to the runbook target before reconciling the batch.');
 
@@ -773,30 +819,151 @@ export class RunbookService {
     await this.persist(updated);
   }
 
+  /** Confirms every plan in a cross-table transaction before clearing its pending state. */
+  private async reconcileUnknownBatch(
+    current: SchemaRunbook,
+    changes: SchemaRunbookTableChange[],
+    outcome: 'applied' | 'notApplied',
+  ): Promise<void> {
+    const connection = this.matchingConnection(current.target);
+    if (!connection) throw new Error('Reconnect to the runbook target before reconciling the batch.');
+    for (const change of changes) {
+      const lifecycle = change.operations.find((operation) =>
+        operation.kind === 'createTable' || operation.kind === 'renameTable' || operation.kind === 'dropTable');
+      const expectedName = lifecycle?.kind === 'createTable' ? lifecycle.table
+        : lifecycle?.kind === 'renameTable' ? lifecycle.newName
+          : change.table;
+      const original = await this.inspectMaybe(connection.connectionId, change.schema, change.table);
+      const resulting = expectedName === change.table
+        ? original
+        : await this.inspectMaybe(connection.connectionId, change.schema, expectedName);
+      if (outcome === 'applied') {
+        if (lifecycle?.kind === 'dropTable') {
+          if (original) throw new Error(`The database still contains ${change.schema}.${change.table}; keep the batch outcome unknown.`);
+        } else {
+          if (!resulting || !change.operations.every((operation) => operationMatchesSnapshot(resulting, operation))) {
+            throw new Error(`The database does not match every expected change for ${change.schema}.${expectedName}; keep the batch outcome unknown.`);
+          }
+        }
+      } else {
+        if (change.baseline === null) {
+          if (resulting) throw new Error(`The database contains ${change.schema}.${expectedName}; this batch cannot be marked unapplied.`);
+        } else if (!original || original.fingerprint !== change.baseline.fingerprint
+          || (expectedName !== change.table && resulting)) {
+          throw new Error(`The original state of ${change.schema}.${change.table} is not intact; this batch cannot be marked unapplied.`);
+        }
+      }
+    }
+    if (outcome === 'applied' && changes.some(({ operations }) => operations.some((operation) =>
+      operation.kind === 'createTable' || operation.kind === 'renameTable' || operation.kind === 'dropTable'))) {
+      await this.refreshAndConfirmTableChanges(connection.connectionId, current);
+    }
+    const updated = outcome === 'applied'
+      ? { ...current, operations: [], tableChanges: [], preview: null,
+        appliedBatches: [...current.appliedBatches, { statements: current.preview!.statements, appliedAt: new Date().toISOString() }],
+        applyOutcomeUnknown: false }
+      : { ...current, applyOutcomeUnknown: false };
+    this.setRunbookForTarget(current.target, updated);
+    this.error.set(null);
+    await this.persist(updated);
+  }
+
   /** Refreshes database resources and verifies the visible result of table lifecycle operations. */
   private async refreshAndConfirmTableChanges(connectionId: string, runbook: SchemaRunbook): Promise<void> {
     const resources = await this.connections.refreshResources(connectionId);
     const hasResource = (schema: string, table: string): boolean =>
       resources.some((resource) => resource.schema === schema && resource.name === table);
-    const operation = runbook.operations[0];
-
-    if (runbook.baseline === null) {
-      const missingTables = runbook.operations
-        .filter((candidate) => candidate.kind === 'createTable' && !hasResource(runbook.schema, candidate.table))
-        .map((candidate) => candidate.kind === 'createTable' ? candidate.table : '');
-      if (missingTables.length) {
-        throw new Error(`The database accepted the create, but the refreshed table list does not contain ${missingTables.join(', ')}. The runbook outcome remains unknown until the resource list confirms the changes.`);
+    for (const change of this.tableChangesOf(runbook)) {
+      const operation = change.operations.find((candidate) => candidate.kind === 'renameTable' || candidate.kind === 'dropTable');
+      if (change.baseline === null) {
+        const missingTables = change.operations
+          .filter((candidate) => candidate.kind === 'createTable' && !hasResource(change.schema, candidate.table))
+          .map((candidate) => candidate.kind === 'createTable' ? candidate.table : '');
+        if (missingTables.length) {
+          throw new Error(`The database accepted the create, but the refreshed table list does not contain ${missingTables.join(', ')}. The runbook outcome remains unknown until the resource list confirms the changes.`);
+        }
+      } else if (operation?.kind === 'dropTable' && hasResource(change.schema, change.table)) {
+        throw new Error(`The database accepted the drop, but the refreshed table list still contains ${change.schema}.${change.table}. The runbook outcome remains unknown until the resource list confirms its removal.`);
+      } else if (operation?.kind === 'renameTable'
+        && (hasResource(change.schema, change.table) || !hasResource(change.schema, operation.newName))) {
+        throw new Error(`The database accepted the rename, but the refreshed table list does not confirm ${change.schema}.${operation.newName}. The runbook outcome remains unknown until the resource list confirms the change.`);
       }
-      return;
     }
+  }
 
-    if (operation?.kind === 'dropTable' && hasResource(runbook.schema, runbook.table)) {
-      throw new Error(`The database accepted the drop, but the refreshed table list still contains ${runbook.schema}.${runbook.table}. The runbook outcome remains unknown until the resource list confirms its removal.`);
+  /** Returns persisted per-table plans, upgrading older single-table state in memory. */
+  private tableChangesOf(runbook: SchemaRunbook): SchemaRunbookTableChange[] {
+    return runbook.tableChanges ?? (runbook.operations.length
+      ? [{ schema: runbook.schema, table: runbook.table, baseline: runbook.baseline, operations: runbook.operations }]
+      : []);
+  }
+
+  /** Keeps data runbooks single-table and prevents row staging from overwriting schema plans. */
+  private assertDataOperationCanBeStaged(current: SchemaRunbook | null, schema: string, table: string): void {
+    if (!current) return;
+    const changes = this.tableChangesOf(current);
+    if (changes.some((change) => change.schema !== schema || change.table !== table
+      || change.operations.some((operation) => !isDataOperation(operation)))) {
+      throw new Error('Apply or discard the pending schema changes before staging data row edits. Data runbooks support one table at a time.');
     }
-    if (operation?.kind === 'renameTable'
-      && (hasResource(runbook.schema, runbook.table) || !hasResource(runbook.schema, operation.newName))) {
-      throw new Error(`The database accepted the rename, but the refreshed table list does not confirm ${runbook.schema}.${operation.newName}. The runbook outcome remains unknown until the resource list confirms the change.`);
+  }
+
+  /** Replaces one table's pending operations, removing its plan when nothing remains. */
+  private replaceTableChange(
+    changes: SchemaRunbookTableChange[],
+    replacement: SchemaRunbookTableChange,
+  ): SchemaRunbookTableChange[] {
+    const existingIndex = changes.findIndex(({ schema, table }) =>
+      schema === replacement.schema && table === replacement.table);
+    const next = [...changes];
+    if (replacement.operations.length) {
+      if (existingIndex >= 0) next[existingIndex] = replacement;
+      else next.push(replacement);
+    } else if (existingIndex >= 0) {
+      next.splice(existingIndex, 1);
     }
+    return next;
+  }
+
+  /** Builds a runbook record while retaining the legacy primary-table fields for existing UI. */
+  private runbookWithTableChanges(
+    current: SchemaRunbook | null,
+    target: ConnectionTarget,
+    changes: SchemaRunbookTableChange[],
+    preview: MigrationPreviewResponse | null,
+  ): SchemaRunbook {
+    const primary = changes[0];
+    return {
+      ...(current ?? { target, schema: primary?.schema ?? '', table: primary?.table ?? '', baseline: null,
+        operations: [], appliedBatches: [], applyOutcomeUnknown: false }),
+      target,
+      schema: primary?.schema ?? current?.schema ?? '',
+      table: primary?.table ?? current?.table ?? '',
+      baseline: primary ? primary.baseline : current?.baseline ?? null,
+      operations: primary?.operations ?? [],
+      tableChanges: changes,
+      preview,
+      applyOutcomeUnknown: false,
+    };
+  }
+
+  /** Requests one combined preview; the PostgreSQL adapter orders cross-table DDL dependencies. */
+  private async previewTableChanges(
+    connectionId: string,
+    changes: SchemaRunbookTableChange[],
+  ): Promise<MigrationPreviewResponse | null> {
+    if (!changes.length) return null;
+    const tablePlans: MigrationTablePlan[] = changes.map(({ schema, table, baseline, operations }) => ({
+      schema,
+      table,
+      baselineFingerprint: baseline?.fingerprint ?? null,
+      operations,
+    }));
+    const first = tablePlans[0]!;
+    return this.connections.previewMigration(connectionId, {
+      ...first,
+      ...(tablePlans.length > 1 ? { tablePlans } : {}),
+    });
   }
 
   /** Checks a table's existence while treating only API 404 responses as absence. */
@@ -988,23 +1155,33 @@ function matchesCreateTableDraft(operation: SchemaOperation, draftId: string, ta
 
 /** Fills fields introduced after the legacy runbook format was stored. */
 function normalizeRunbook(runbook: SchemaRunbook): SchemaRunbook {
+  const normalizeOperations = (operations: SchemaOperation[], table: string): SchemaOperation[] => operations.map((operation) => {
+    if (operation.kind !== 'createTable') return operation;
+    const legacy = operation as typeof operation & { table?: string; ifNotExists?: boolean };
+    return {
+      ...operation,
+      table: legacy.table ?? table,
+      ifNotExists: legacy.ifNotExists ?? false,
+    };
+  });
   return {
     ...runbook,
-    operations: runbook.operations.map((operation) => {
-      if (operation.kind !== 'createTable') return operation;
-      const legacy = operation as typeof operation & { table?: string; ifNotExists?: boolean };
-      return {
-        ...operation,
-        table: legacy.table ?? runbook.table,
-        ifNotExists: legacy.ifNotExists ?? false,
-      };
-    }),
+    operations: normalizeOperations(runbook.operations, runbook.table),
+    tableChanges: runbook.tableChanges?.map((change) => ({
+      ...change,
+      operations: normalizeOperations(change.operations, change.table),
+    })),
   };
 }
 
 /** Converts errors into a stable message for the runbook notice area. */
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : 'The runbook request failed.';
+}
+
+/** Identifies row operations so schema and data batches cannot overwrite each other. */
+function isDataOperation(operation: SchemaOperation): boolean {
+  return operation.kind === 'updateDataRow' || operation.kind === 'insertDataRow' || operation.kind === 'deleteDataRow';
 }
 
 /** Keeps the pending batch marked uncertain when a failure cannot prove rollback. */

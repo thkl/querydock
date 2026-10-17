@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, effect, inject, signal, viewChild } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, signal, untracked, viewChild } from '@angular/core';
 import { ActivatedRoute, Router } from '@angular/router';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { combineLatest } from 'rxjs';
@@ -80,6 +80,7 @@ export class TableDataComponent {
   });
   readonly pendingUpdateCount = computed(() => this.pendingUpdateKeys().size);
   private id = signal<string | null>(null);
+  private readonly gridControlStates = new Map<string, ReturnType<AgridControl['toJSON']>>();
   private requestVersion = 0;
   private lastGridCriteria = '';
   private currentColumns: TableDataQueryResponse['columns'] = [];
@@ -87,7 +88,7 @@ export class TableDataComponent {
   private rowVersions: string[] = [];
   private originalRows: TableDataRow[] = [];
   private newRows = new Map<number, { draftId: string; baseline: TableDataRow; stagedValues?: Record<string, string | null> }>();
-  readonly gridControl = new AgridControl({ allowRowReorder: false, pageSize: PAGE_SIZE });
+  gridControl = new AgridControl({ allowRowReorder: false, pageSize: PAGE_SIZE });
   private gridState = this.createGridState();
   readonly provider = signal(this.gridState.provider);
 
@@ -98,8 +99,13 @@ export class TableDataComponent {
       const connection = this.connections.activeConnection();
       const table = params.get('tableName');
       const schema = query.get('schema') ?? 'public';
+      const previousPageId = this.id();
+      if (previousPageId) this.gridControlStates.set(previousPageId, this.gridControl.toJSON());
+      const pageId = connection && table ? JSON.stringify([connection.connectionId, schema, table]) : null;
       this.requestVersion += 1;
-      this.id.set(`${schema}.${table}`);
+      this.id.set(pageId);
+      this.gridControl = new AgridControl(this.gridControlStates.get(pageId ?? '')
+        ?? { allowRowReorder: false, pageSize: PAGE_SIZE });
       this.error.set(null);
       this.loaded.set(false);
       this.totalRows.set(0);
@@ -113,7 +119,7 @@ export class TableDataComponent {
       this.canDeleteRows.set(false);
       this.newRows.clear();
       this.saveChangesToRunbook.set(connection && table
-        ? this.workspacePages.saveDataChangesToRunbook(connection.connectionId, schema, table)
+        ? untracked(() => this.workspacePages.saveDataChangesToRunbook(connection.connectionId, schema, table))
         : false);
       this.gridControl.setPage(1);
       this.gridState = this.createGridState();
@@ -123,7 +129,7 @@ export class TableDataComponent {
         return;
       }
       if (!table || !connection.capabilities.browseData) return;
-      this.workspacePages.registerOpenedTableData(connection.connectionId, schema, table);
+      untracked(() => this.workspacePages.registerOpenedTableData(connection.connectionId, schema, table));
     });
     effect(() => {
       const gridProvider = this.provider();
@@ -207,7 +213,7 @@ export class TableDataComponent {
       showChangedCellIndicator: true,
       zebraStripes: true,
       rowSelection: 'single',
-      gridId: `query_data_${this.id()}`,
+      gridId: `query_data_v2_${this.id()}`,
       showRowNumbers: true,
       enableColumnMarking: false,
       resizableSidebar: true,

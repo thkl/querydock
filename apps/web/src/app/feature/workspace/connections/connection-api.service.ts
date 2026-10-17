@@ -389,17 +389,26 @@ function parseMigrationPreview(payload: unknown): MigrationPreviewResponse {
 /** Validates applied SQL and snapshots, allowing an empty snapshot only for a confirmed table drop. */
 function parseMigrationApply(payload: unknown, plan: MigrationApplyRequest): MigrationApplyResponse {
   const snapshots = isRecord(payload) ? payload['snapshots'] : undefined;
-  const isTableDrop = plan.operations.length === 1 && plan.operations[0]?.kind === 'dropTable';
+  const plans = plan.tablePlans?.length ? plan.tablePlans : [plan];
+  const isAllTablesDropped = plans.every((tablePlan) => tablePlan.operations.some((operation) => operation.kind === 'dropTable'));
+  const tableResults = isRecord(payload) ? payload['tableResults'] : undefined;
   if (isRecord(payload)
     && Array.isArray(payload['appliedStatements']) && payload['appliedStatements'].every((statement) => typeof statement === 'string')
-    && Array.isArray(snapshots) && (snapshots.length > 0 || isTableDrop) && snapshots.every((snapshot) => isRecord(snapshot)
+    && Array.isArray(snapshots) && (snapshots.length > 0 || isAllTablesDropped) && snapshots.every((snapshot) => isRecord(snapshot)
       && typeof snapshot['schema'] === 'string'
       && typeof snapshot['name'] === 'string'
       && typeof snapshot['kind'] === 'string'
       && typeof snapshot['canAlter'] === 'boolean'
       && typeof snapshot['fingerprint'] === 'string'
       && Array.isArray(snapshot['fields'])
-      && Array.isArray(snapshot['constraints']))) {
+      && Array.isArray(snapshot['constraints']))
+    && (tableResults === undefined || (Array.isArray(tableResults) && tableResults.every((result) => isRecord(result)
+      && typeof result['schema'] === 'string' && typeof result['table'] === 'string'
+      && (typeof result['resultingTable'] === 'string' || result['resultingTable'] === null)
+      && (result['snapshot'] === null || (isRecord(result['snapshot'])
+        && typeof result['snapshot']['schema'] === 'string'
+        && typeof result['snapshot']['name'] === 'string'
+        && typeof result['snapshot']['fingerprint'] === 'string')))))) {
     return payload as unknown as MigrationApplyResponse;
   }
   throw new Error('The server did not return a valid confirmation for the migration.');

@@ -2,7 +2,7 @@ import '@angular/compiler';
 import 'fake-indexeddb/auto';
 import { Injector, signal } from '@angular/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ConnectResponse, CreateTableField, MigrationPreviewRequest } from '@querydock/contracts';
+import type { ConnectResponse, CreateTableField, MigrationPreviewRequest, TableSnapshot } from '@querydock/contracts';
 import { ApiRequestError, ConnectionApiService } from '../src/app/feature/workspace/connections/connection-api.service';
 import { RunbookService } from '../src/app/feature/workspace/runbook/runbook.service';
 
@@ -53,6 +53,13 @@ const fields: CreateTableField[] = [
   { name: 'id', type: 'integer', nullable: false, defaultExpression: null, identityGeneration: 'always' },
 ];
 
+function snapshot(name: string, fingerprint: string): TableSnapshot {
+  return {
+    schema: 'public', name, kind: 'table', canAlter: true, fingerprint,
+    editableFieldTypes: [], editableConstraintKinds: [], editableIdentityGenerations: [], fields: [], constraints: [],
+  };
+}
+
 beforeEach(async () => clearRunbookStore());
 
 describe('RunbookService', () => {
@@ -92,6 +99,22 @@ describe('RunbookService', () => {
     await expect(service.stageCreateTable(alpha, 'archive', 'old_customers', fields, false, 'draft-archive'))
       .rejects.toThrow('one schema at a time');
     expect(service.runbook()?.operations).toHaveLength(1);
+  });
+
+  it('stages schema operations on multiple tables into one preview request', async () => {
+    const { service, connections, alpha } = createHarness();
+    await service.stageSchemaOperations(alpha, snapshot('children', 'a'.repeat(64)), [
+      { kind: 'dropConstraint', name: 'fk_children_parents' },
+    ], ['fk_children_parents']);
+    await service.stageTableOperation(alpha, snapshot('parents', 'b'.repeat(64)), { kind: 'dropTable' });
+
+    expect(service.pendingOperationCount()).toBe(2);
+    expect(connections.previewMigration).toHaveBeenLastCalledWith('connection-alpha', expect.objectContaining({
+      tablePlans: expect.arrayContaining([
+        expect.objectContaining({ table: 'children', operations: [{ kind: 'dropConstraint', name: 'fk_children_parents' }] }),
+        expect.objectContaining({ table: 'parents', operations: [{ kind: 'dropTable' }] }),
+      ]),
+    }));
   });
 
   it('removes a closed staged draft and refreshes the preview for remaining drafts', async () => {
