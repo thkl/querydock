@@ -13,11 +13,13 @@
 
 .connection-dialog {
   width: min(560px, 100%);
+  max-height: 92vh;
   padding: 26px;
   border: 1px solid var(--color-border-strong);
   border-radius: 16px;
   background: var(--color-background-raised);
   box-shadow: 0 28px 90px rgb(0 0 0 / 50%);
+  overflow-y: auto;
 }
 
 .dialog-header, .dialog-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
@@ -33,6 +35,10 @@ h2 { margin: 0; color: var(--color-foreground); font-size: 1.35em; letter-spacin
 .vault-form { display: grid; gap: 12px; }
 .vault-unlock-form { grid-template-columns: minmax(0, 1fr) auto; align-items: end; }
 .vault-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.vault-backup-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.vault-restore-form { display: grid; gap: 12px; padding: 12px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-background-raised); }
+.vault-restore-form strong { color: var(--color-foreground); overflow-wrap: anywhere; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; clip-path: inset(50%); }
 .vault-secondary-button, .vault-link-button { min-height: 36px; padding: 0 11px; border-radius: 7px; cursor: pointer; font: inherit; font-size: .88em; font-weight: 650; }
 .vault-secondary-button { border: 1px solid var(--color-border-strong); background: var(--color-surface-solid); color: var(--color-foreground); }
 .vault-link-button { border: 1px solid transparent; background: transparent; color: var(--color-accent); }

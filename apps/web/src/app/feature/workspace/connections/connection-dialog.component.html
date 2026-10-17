@@ -73,6 +73,7 @@
                   </div>
                   <div class="saved-connection-actions">
                     <button class="vault-secondary-button" type="button" (click)="connectSaved(profile)">Connect</button>
+                    <button class="vault-link-button" type="button" (click)="editConnectionProfile(profile)">Edit details</button>
                     @if (editingProfileId() === profile.id) {
                       <button class="vault-link-button" type="button" (click)="saveProfileName(profile)">Save name</button>
                       <button class="vault-link-button" type="button" (click)="editingProfileId.set(null)">Cancel</button>
@@ -92,6 +93,29 @@
           } @else {
             <p class="vault-copy">No saved connections yet.</p>
           }
+        }
+
+        <div class="vault-backup-actions">
+          @if (vault.status() === 'unlocked') {
+            <button class="vault-secondary-button" type="button" (click)="exportVault()">Export encrypted backup</button>
+          }
+          @if (vault.status() !== 'loading' && vault.status() !== 'unavailable') {
+            <button class="vault-link-button" type="button" (click)="chooseVaultBackup()">Import backup</button>
+          }
+          <input #backupFileInput class="visually-hidden" type="file" accept="application/json,.json" (change)="selectVaultBackup($event)" />
+        </div>
+        @if (pendingBackupFile()) {
+          <form class="vault-restore-form" autocomplete="off" (submit)="restoreVault($event)">
+            <p class="vault-copy"><strong>{{ pendingBackupFile()?.name }}</strong> will replace the vault currently stored in this browser. Enter the password used when this backup was made. The current vault is kept if verification fails.</p>
+            <label class="field">
+              <span>Backup vault password</span>
+              <input name="backupPassword" type="password" autocomplete="current-password" required />
+            </label>
+            <div class="vault-actions">
+              <button class="vault-secondary-button" type="button" (click)="cancelVaultRestore()">Cancel</button>
+              <button class="connect-button" type="submit">Restore and replace vault</button>
+            </div>
+          </form>
         }
 
         @if (vaultMessage()) {
@@ -117,7 +141,7 @@
         }
       </section>
 
-      <form autocomplete="on" (submit)="submit($event)">
+      <form #connectionForm autocomplete="on" (submit)="submit($event)">
         <div class="form-grid">
           <label class="field">
             <span>Database engine</span>
@@ -128,29 +152,29 @@
           </label>
           <label class="field field-host">
             <span>Host</span>
-            <input name="host" type="text" autocomplete="url" placeholder="localhost" value="localhost" required />
+            <input name="host" type="text" autocomplete="url" placeholder="localhost" [value]="editingConnectionProfile()?.configuration?.host ?? 'localhost'" required />
           </label>
-          @if (vault.status() === 'unlocked' && saveToVault()) {
+          @if (vault.status() === 'unlocked' && (saveToVault() || editingConnectionProfile())) {
             <label class="field field-profile-name">
               <span>Connection name</span>
-              <input name="connectionName" type="text" maxlength="80" autocomplete="organization-title" placeholder="e.g. Production read-only" required />
+              <input name="connectionName" type="text" maxlength="80" autocomplete="organization-title" placeholder="e.g. Production read-only" [value]="editingConnectionProfile() ? connectionEditName() : ''" (input)="editingConnectionProfile() && connectionEditName.set($any($event.target).value)" [required]="saveToVault() || !!editingConnectionProfile()" />
             </label>
           }
           <label class="field">
             <span>Port</span>
-            <input name="port" type="number" min="1" max="65535" [value]="selectedAdapter() === 'postgresql' ? 5432 : 1433" required />
+            <input name="port" type="number" min="1" max="65535" [value]="connectionPort()" required />
           </label>
           <label class="field">
             <span>Database</span>
-            <input name="database" type="text" autocomplete="off" placeholder="development" required />
+            <input name="database" type="text" autocomplete="off" placeholder="development" [value]="editingConnectionProfile()?.configuration?.database ?? ''" required />
           </label>
           <label class="field">
             <span>Username</span>
-            <input name="username" type="text" autocomplete="username" placeholder="postgres" required />
+            <input name="username" type="text" autocomplete="username" placeholder="postgres" [value]="editingConnectionProfile()?.configuration?.username ?? ''" required />
           </label>
           <label class="field field-password">
             <span>Password</span>
-            <input name="password" type="password" autocomplete="current-password" />
+            <input name="password" type="password" autocomplete="current-password" [value]="connectionPassword()" />
           </label>
           @if (selectedAdapter() === 'postgresql') {
             <label class="field field-ssl">
@@ -163,17 +187,17 @@
             </label>
           } @else {
             <label class="save-profile-option">
-              <input name="encrypt" type="checkbox" checked />
+              <input name="encrypt" type="checkbox" [checked]="connectionEncrypt()" />
               <span>Encrypt connection</span>
             </label>
             <label class="save-profile-option">
-              <input name="trustServerCertificate" type="checkbox" />
+              <input name="trustServerCertificate" type="checkbox" [checked]="connectionTrustServerCertificate()" />
               <span>Trust server certificate (for local development only)</span>
             </label>
           }
         </div>
 
-        @if (vault.status() === 'unlocked') {
+        @if (vault.status() === 'unlocked' && !editingConnectionProfile()) {
           <label class="save-profile-option">
             <input name="saveInVault" type="checkbox" [checked]="saveToVault()" (change)="updateSaveToVault($event)" />
             <span>Save this connection in the encrypted browser vault</span>
@@ -185,9 +209,9 @@
         }
 
         <footer class="dialog-actions">
-          <button class="cancel-button" type="button" [disabled]="state.connecting()" (click)="closeDialog()">Cancel</button>
+          <button class="cancel-button" type="button" [disabled]="state.connecting()" (click)="editingConnectionProfile() ? cancelConnectionEdit() : closeDialog()">{{ editingConnectionProfile() ? 'Cancel editing' : 'Cancel' }}</button>
           <button class="connect-button" type="submit" [disabled]="state.connecting() || pendingVaultSave() !== null">
-            @if (state.connecting()) { Connecting… } @else { Connect }
+            @if (editingConnectionProfile()) { Save changes } @else if (state.connecting()) { Connecting… } @else { Connect }
           </button>
         </footer>
       </form>

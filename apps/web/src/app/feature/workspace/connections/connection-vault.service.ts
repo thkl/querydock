@@ -29,6 +29,13 @@ interface EncryptedProfileRecord {
   updatedAt: number;
 }
 
+export interface ConnectionVaultBackup {
+  format: 'querydock-connection-vault';
+  version: 1;
+  metadata: VaultMetadata;
+  profiles: EncryptedProfileRecord[];
+}
+
 interface ProfilePayload {
   configuration: DatabaseConnectRequest;
   name?: string;
@@ -132,6 +139,86 @@ export class ConnectionVaultService {
     ].sort((left, right) => right.updatedAt - left.updatedAt));
   }
 
+  /** Replaces one saved profile's connection details while retaining its stable identity. */
+  async updateProfile(profileId: string, configuration: DatabaseConnectRequest, name: string): Promise<void> {
+    const key = this.requireUnlockedKey();
+    const existing = this.profiles().find(({ id }) => id === profileId);
+    if (!existing) throw new Error('This saved connection is no longer in the vault. Refresh the list and try again.');
+    const savedName = name.trim();
+    if (savedName.length > 80) throw new Error('Connection names must be 80 characters or fewer.');
+    const updatedAt = Date.now();
+    const payload: ProfilePayload = { configuration, name: savedName, createdAt: existing.createdAt };
+    const encrypted = await this.encrypt(JSON.stringify(payload), key, `profile:${profileId}:v1`);
+    await this.putRecord({
+      id: `profile:${profileId}`,
+      iv: encodeBase64(encrypted.iv),
+      ciphertext: encodeBase64(encrypted.ciphertext),
+      updatedAt,
+    });
+    this.profiles.update((current) => current.map((profile) => profile.id === profileId
+      ? { ...profile, name: savedName, configuration, updatedAt }
+      : profile).sort((left, right) => right.updatedAt - left.updatedAt));
+  }
+
+  /** Exports an encrypted-only backup of this unlocked vault. */
+  async exportBackup(): Promise<ConnectionVaultBackup> {
+    this.requireUnlockedKey();
+    if (!this.metadata) throw new Error('The connection vault is not configured.');
+    const records = await this.getAllRecords<unknown>();
+    if (records.some((record) => hasProfileId(record) && !isEncryptedProfileRecord(record))) {
+      throw new Error('A saved connection record is damaged, so the vault cannot be exported.');
+    }
+    return {
+      format: 'querydock-connection-vault',
+      version: 1,
+      metadata: this.metadata,
+      profiles: records.filter(isEncryptedProfileRecord),
+    };
+  }
+
+  /** Validates and restores an encrypted backup, replacing local vault data only after password verification. */
+  async restoreBackup(serializedBackup: string, password: string): Promise<void> {
+    await this.initialized;
+    if (serializedBackup.length > 5_000_000) throw new Error('This vault backup is too large to import.');
+    let backup: unknown;
+    try {
+      backup = JSON.parse(serializedBackup) as unknown;
+    } catch {
+      throw new Error('This file is not a valid QueryDock vault backup.');
+    }
+    if (!isVaultBackup(backup)) throw new Error('This file is not a supported QueryDock vault backup.');
+
+    const ids = new Set<string>();
+    for (const record of backup.profiles) {
+      if (!isEncryptedProfileRecord(record) || ids.has(record.id)) {
+        throw new Error('The vault backup contains an invalid or duplicate connection record.');
+      }
+      ids.add(record.id);
+    }
+    if (backup.profiles.length > 500) throw new Error('This vault backup contains too many connection profiles.');
+
+    const key = await this.deriveKey(password, decodeBase64(backup.metadata.salt), backup.metadata.iterations);
+    let profiles: SavedConnectionProfile[];
+    try {
+      const check = await this.decrypt(
+        decodeBase64(backup.metadata.checkIv),
+        decodeBase64(backup.metadata.checkCiphertext),
+        key,
+        'vault-check:v1',
+      );
+      if (check !== VERIFICATION_TEXT) throw new Error('verification failed');
+      profiles = await this.decryptProfiles(backup.profiles, key);
+    } catch {
+      throw new Error('The backup password is incorrect, or the encrypted vault backup is damaged. Your current vault was not changed.');
+    }
+    await this.replaceRecords([backup.metadata, ...backup.profiles]);
+    this.metadata = backup.metadata;
+    this.key = key;
+    this.profiles.set(profiles);
+    this.error.set(null);
+    this.status.set('unlocked');
+  }
+
   /** Deletes one encrypted profile from IndexedDB and the in-memory profile list. */
   async forget(profileId: string): Promise<void> {
     this.requireUnlockedKey();
@@ -179,12 +266,17 @@ export class ConnectionVaultService {
   /** Decrypts, validates, and sorts all saved profiles for the unlocked key. */
   private async readProfiles(key: CryptoKey): Promise<SavedConnectionProfile[]> {
     const records = await this.getAllRecords<unknown>();
-    const profiles: SavedConnectionProfile[] = [];
     const candidates = records.filter(hasProfileId);
     if (candidates.some((record) => !isEncryptedProfileRecord(record))) {
       throw new Error('A saved connection record is damaged.');
     }
-    for (const record of candidates as EncryptedProfileRecord[]) {
+    return this.decryptProfiles(candidates as EncryptedProfileRecord[], key);
+  }
+
+  /** Decrypts and validates a supplied set of encrypted profiles. */
+  private async decryptProfiles(records: EncryptedProfileRecord[], key: CryptoKey): Promise<SavedConnectionProfile[]> {
+    const profiles: SavedConnectionProfile[] = [];
+    for (const record of records) {
       const id = record.id.slice('profile:'.length);
       const plaintext = await this.decrypt(
         decodeBase64(record.iv),
@@ -204,6 +296,20 @@ export class ConnectionVaultService {
       });
     }
     return profiles.sort((left, right) => right.updatedAt - left.updatedAt);
+  }
+
+  /** Atomically replaces all records in IndexedDB after a backup has been verified. */
+  private async replaceRecords(records: Array<{ id: string }>): Promise<void> {
+    const database = await this.getDatabase();
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction(STORE_NAME, 'readwrite');
+      const store = transaction.objectStore(STORE_NAME);
+      store.clear();
+      for (const record of records) store.put(record);
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error ?? new Error('Could not restore the connection vault.'));
+      transaction.onabort = () => reject(transaction.error ?? new Error('Could not restore the connection vault.'));
+    });
   }
 
   /** Derives an AES-GCM key using the vault's PBKDF2 parameters. */
@@ -396,6 +502,16 @@ function isEncryptedProfileRecord(value: unknown): value is EncryptedProfileReco
   } catch {
     return false;
   }
+}
+
+/** Validates the outer envelope and cryptographic metadata of a portable vault backup. */
+function isVaultBackup(value: unknown): value is ConnectionVaultBackup {
+  if (typeof value !== 'object' || value === null) return false;
+  const backup = value as Partial<ConnectionVaultBackup>;
+  return backup.format === 'querydock-connection-vault'
+    && backup.version === 1
+    && isVaultMetadata(backup.metadata)
+    && Array.isArray(backup.profiles);
 }
 
 /** Selects IndexedDB records belonging to connection profiles. */

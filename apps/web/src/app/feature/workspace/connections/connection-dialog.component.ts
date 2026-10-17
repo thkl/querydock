@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, ElementRef, inject, signal, viewChild } from '@angular/core';
 import type { DatabaseConnectRequest } from '@querydock/contracts';
 import { ConnectionApiService } from './connection-api.service';
 import { ConnectionVaultService, type SavedConnectionProfile } from './connection-vault.service';
@@ -22,10 +22,17 @@ export class ConnectionDialogComponent {
   readonly forgettingProfileId = signal<string | null>(null);
   readonly editingProfileId = signal<string | null>(null);
   readonly editingProfileName = signal('');
+  readonly editingConnectionProfile = signal<SavedConnectionProfile | null>(null);
+  readonly connectionEditName = signal('');
+  readonly pendingBackupFile = signal<File | null>(null);
+  readonly backupFileInput = viewChild<ElementRef<HTMLInputElement>>('backupFileInput');
+  readonly connectionForm = viewChild<ElementRef<HTMLFormElement>>('connectionForm');
 
   /** Closes the dialog through the connection service unless a request is active. */
   closeDialog(): void {
     this.saveToVault.set(false);
+    this.cancelConnectionEdit();
+    this.cancelVaultRestore();
     this.state.closeConnectDialog();
   }
 
@@ -101,6 +108,17 @@ export class ConnectionDialogComponent {
       };
     const saveInVault = values.get('saveInVault') === 'on';
     const profileName = String(values.get('connectionName') ?? '').trim();
+    const editingProfile = this.editingConnectionProfile();
+    if (editingProfile) {
+      try {
+        await this.vault.updateProfile(editingProfile.id, configuration, profileName);
+        this.vaultMessage.set('Saved connection details updated.');
+        this.cancelConnectionEdit();
+      } catch (error) {
+        this.vaultMessage.set(error instanceof Error ? error.message : 'Could not update this saved connection.');
+      }
+      return;
+    }
     const connected = await this.state.connect(configuration, !saveInVault);
     if (!connected) return;
     if (saveInVault) {
@@ -181,6 +199,78 @@ export class ConnectionDialogComponent {
     }
   }
 
+  /** Loads a saved profile into the connection form for editing without connecting. */
+  editConnectionProfile(profile: SavedConnectionProfile): void {
+    this.editingConnectionProfile.set(profile);
+    this.connectionEditName.set(profile.name);
+    this.selectedAdapter.set(profile.configuration.adapter);
+    this.saveToVault.set(false);
+    this.vaultMessage.set(null);
+    queueMicrotask(() => this.connectionForm()?.nativeElement.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  }
+
+  /** Leaves profile edit mode and clears its connection secret from the form. */
+  cancelConnectionEdit(): void {
+    this.editingConnectionProfile.set(null);
+    this.connectionEditName.set('');
+    this.connectionForm()?.nativeElement.reset();
+    this.selectedAdapter.set('postgresql');
+  }
+
+  /** Downloads a JSON envelope containing only the vault's encrypted metadata and records. */
+  async exportVault(): Promise<void> {
+    try {
+      const backup = await this.vault.exportBackup();
+      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `querydock-vault-${new Date().toISOString().slice(0, 10)}.json`;
+      anchor.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      this.vaultMessage.set('Encrypted vault backup downloaded. Keep the file private and remember its vault password.');
+    } catch (error) {
+      this.vaultMessage.set(error instanceof Error ? error.message : 'Could not export the encrypted vault.');
+    }
+  }
+
+  /** Opens the browser file picker for an encrypted vault backup. */
+  chooseVaultBackup(): void {
+    this.backupFileInput()?.nativeElement.click();
+  }
+
+  /** Holds a selected backup until the user confirms restoration with its password. */
+  selectVaultBackup(event: Event): void {
+    const input = event.currentTarget as HTMLInputElement;
+    const file = input.files?.[0] ?? null;
+    input.value = '';
+    this.pendingBackupFile.set(file);
+    this.vaultMessage.set(null);
+  }
+
+  /** Verifies a backup password and restores the vault after explicit replacement confirmation. */
+  async restoreVault(event: SubmitEvent): Promise<void> {
+    event.preventDefault();
+    const file = this.pendingBackupFile();
+    const form = event.currentTarget;
+    if (!file || !(form instanceof HTMLFormElement)) return;
+    try {
+      const password = String(new FormData(form).get('backupPassword') ?? '');
+      await this.vault.restoreBackup(await file.text(), password);
+      this.pendingBackupFile.set(null);
+      this.resetVaultArmed.set(false);
+      this.vaultMessage.set('Encrypted vault restored and unlocked.');
+      form.reset();
+    } catch (error) {
+      this.vaultMessage.set(error instanceof Error ? error.message : 'Could not restore this vault backup.');
+    }
+  }
+
+  /** Cancels a pending backup restore without touching the current vault. */
+  cancelVaultRestore(): void {
+    this.pendingBackupFile.set(null);
+  }
+
   /** Requires confirmation before deleting all encrypted vault records. */
   async resetVault(): Promise<void> {
     if (!this.resetVaultArmed()) {
@@ -211,5 +301,28 @@ export class ConnectionDialogComponent {
       ? configuration.sslMode
       : configuration.encrypt ? 'TLS encrypted' : 'TLS disabled';
     return `${configuration.database} · ${configuration.host}:${configuration.port} · ${configuration.username} · ${transport}`;
+  }
+
+  /** Returns the port displayed for a saved profile or the selected engine's usual default. */
+  connectionPort(): number {
+    const configuration = this.editingConnectionProfile()?.configuration;
+    return configuration?.port ?? (this.selectedAdapter() === 'postgresql' ? 5432 : 1433);
+  }
+
+  /** Provides the saved password only while that profile is explicitly being edited. */
+  connectionPassword(): string {
+    return this.editingConnectionProfile()?.configuration.password ?? '';
+  }
+
+  /** Returns the TLS encryption setting displayed for a profile being edited. */
+  connectionEncrypt(): boolean {
+    const configuration = this.editingConnectionProfile()?.configuration;
+    return configuration?.adapter === 'sqlserver' ? configuration.encrypt : true;
+  }
+
+  /** Returns the certificate trust setting displayed for a profile being edited. */
+  connectionTrustServerCertificate(): boolean {
+    const configuration = this.editingConnectionProfile()?.configuration;
+    return configuration?.adapter === 'sqlserver' && configuration.trustServerCertificate;
   }
 }
