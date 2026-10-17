@@ -600,6 +600,7 @@ export class RunbookService {
       baselineFingerprint: baseline?.fingerprint ?? null,
       operations,
     }));
+    const schemaChanged = this.hasSchemaChanges(tableChanges);
     const plan: MigrationApplyRequest = {
       ...tablePlans[0]!,
       ...(tablePlans.length > 1 ? { tablePlans } : {}),
@@ -639,6 +640,7 @@ export class RunbookService {
         lastAppliedTableAction: isDropped && tableChanges.length === 1 ? 'dropped' : undefined,
       };
       this.setRunbookForTarget(current.target, updated);
+      if (schemaChanged) this.connections.markSchemaChanged(connection.connectionId);
       await this.persist(updated);
     } catch (error) {
       if (!serverConfirmedApply && !isUncertainApplyError(error)) {
@@ -684,10 +686,15 @@ export class RunbookService {
   async resolveUnknownApply(outcome: 'applied' | 'notApplied'): Promise<void> {
     await this.ready;
     if (this.reconciling()) return;
+    const current = this.runbook();
     this.reconciling.set(true);
     this.error.set(null);
     try {
       await this.reconcileUnknownApply(outcome);
+      const connection = current ? this.matchingConnection(current.target) : null;
+      if (outcome === 'applied' && connection && current && this.hasSchemaChanges(this.tableChangesOf(current))) {
+        this.connections.markSchemaChanged(connection.connectionId);
+      }
     } catch (error) {
       this.error.set(messageOf(error));
       throw error;
@@ -1044,6 +1051,11 @@ export class RunbookService {
   /** Resolves a currently connected database whose target matches the saved runbook. */
   private matchingConnection(target: ConnectionTarget): ConnectResponse | undefined {
     return this.connections.connections().find((connection) => sameTarget(connection.target, target));
+  }
+
+  /** Detects schema operations so successful row-only runs do not reload diagram metadata. */
+  private hasSchemaChanges(tableChanges: SchemaRunbookTableChange[]): boolean {
+    return tableChanges.some(({ operations }) => operations.some((operation) => !isDataOperation(operation)));
   }
 
   /** Restores stored runbooks, migrates the legacy active record, and marks storage availability. */

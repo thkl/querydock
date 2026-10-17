@@ -45,15 +45,19 @@ h2 { font-size: 1.15em; }
 .table-heading strong { overflow: hidden; color: var(--color-foreground); font-size: 1em; text-overflow: ellipsis; white-space: nowrap; }
 .open-table-button { display: grid; width: 32px; height: 32px; flex: 0 0 32px; place-items: center; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-surface-solid); color: var(--color-accent-strong); cursor: pointer; font-size: 1.05em; }
 .field-list { display: grid; flex: 0 0 auto; gap: 0; margin: 0; padding: 4px 0; list-style: none; }
-.field-list li { display: grid; height: 29px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: center; gap: 7px; padding: 0 12px; border-bottom: 1px solid var(--color-border); cursor: default; font-size: .82em; transition: background-color 120ms ease, opacity 120ms ease; }
+.field-list li { display: grid; height: 29px; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; align-items: center; gap: 7px; padding: 0 12px; border-bottom: 1px solid var(--color-border); cursor: context-menu; font-size: .82em; transition: background-color 120ms ease, opacity 120ms ease; }
 .field-list li:hover { background: var(--color-hover); }
 .field-list li.is-related-field { background: var(--color-selected); box-shadow: inset 3px 0 var(--color-accent); }
+.field-list li.is-pending-source { background: var(--color-selected); box-shadow: inset 3px 0 var(--color-accent); }
+.field-list li.is-pending-destination { background: var(--color-draft-subtle); box-shadow: inset 3px 0 var(--color-draft); }
 .table-card.is-participating .field-list li:not(.is-related-field) { opacity: .32; }
 .field-name, .field-type { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .field-name { color: var(--color-foreground); }
 .field-type { color: var(--color-muted); }
 .key-tags { display: flex; gap: 3px; }
 .key-tag { padding: 2px 4px; border-radius: 4px; background: var(--color-chip); color: var(--color-accent-strong); font-size: .72em; font-weight: 700; }
+.endpoint-tag { padding: 2px 4px; border-radius: 4px; background: var(--color-selected); color: var(--color-accent-strong); font-size: .65em; font-weight: 750; letter-spacing: .04em; }
+.is-pending-destination .endpoint-tag { background: var(--color-draft-subtle); color: var(--color-draft); }
 .table-card-footer { display: flex; min-height: 38px; flex: 0 0 38px; align-items: center; justify-content: space-between; gap: 8px; margin-top: auto; padding: 0 12px; color: var(--color-muted); font-size: .76em; }
 .read-only-label { color: var(--color-warning); }
 .empty-state, .loading-state, .error-state { padding: 24px; border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-surface); color: var(--color-muted); line-height: 1.5; }
@@ -61,12 +65,13 @@ h2 { font-size: 1.15em; }
 .empty-state { display: grid; justify-items: start; align-content: center; min-height: 230px; }
 .empty-state p { margin: 8px 0 0; }
 .context-menu-backdrop { position: fixed; z-index: 1000; padding: 0; border: 0; background: transparent; inset: 0; cursor: default; }
-.relationship-context-menu { position: fixed; z-index: 1001; display: grid; width: min(300px, calc(100vw - 20px)); max-height: min(360px, calc(100dvh - 20px)); gap: 5px; overflow: auto; padding: 6px; border: 1px solid var(--color-border-strong); border-radius: 9px; background: var(--color-background-raised); box-shadow: var(--shadow-glass); }
+.relationship-context-menu { position: fixed; z-index: 1001; display: grid; width: min(320px, calc(100vw - 20px)); max-height: min(360px, calc(100dvh - 20px)); gap: 5px; overflow: auto; padding: 6px; border: 1px solid var(--color-border-strong); border-radius: 9px; background: var(--color-background-raised); box-shadow: var(--shadow-glass); }
 .context-menu-group { display: grid; gap: 2px; }
 .context-menu-group + .context-menu-group { padding-top: 5px; border-top: 1px solid var(--color-border); }
 .context-menu-label { overflow: hidden; margin: 3px 7px; color: var(--color-muted); font-size: .78em; text-overflow: ellipsis; white-space: nowrap; }
 .context-menu-group button { min-height: 34px; padding: 0 9px; border: 0; border-radius: 5px; background: transparent; color: var(--color-foreground); cursor: pointer; font: inherit; text-align: left; }
 .context-menu-group button:hover { background: var(--color-hover); }
+.context-menu-group button:disabled { cursor: not-allowed; opacity: .5; }
 .context-menu-group button.danger-action { color: var(--color-danger); }
 .context-menu-readonly { padding: 7px 9px; color: var(--color-muted); font-size: .85em; }
 .editor-backdrop { position: fixed; z-index: 1100; display: grid; place-items: center; padding: 18px; background: color-mix(in srgb, var(--color-background) 82%, transparent); inset: 0; backdrop-filter: blur(7px); }
@@ -74,6 +79,11 @@ h2 { font-size: 1.15em; }
 .editor-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 2px; }
 .editor-header .eyebrow { margin-bottom: 4px; }
 .editor-header h2 { font-size: 1.28em; }
+.editor-label-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.editor-label-row .editor-label { margin: 0; }
+.suggestion-button { padding: 2px 0; border: 0; background: transparent; color: var(--color-accent-strong); cursor: pointer; font: inherit; font-size: .82em; font-weight: 650; }
+.suggestion-button:hover { text-decoration: underline; }
+.name-suggestion code { color: var(--color-accent-strong); font-family: var(--font-mono, monospace); }
 .close-button { display: grid; width: 36px; height: 36px; place-items: center; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-surface); color: var(--color-muted); cursor: pointer; font: inherit; font-size: 1.2em; }
 .editor-label { margin-top: 3px; color: var(--color-muted); font-size: .9em; font-weight: 650; }
 .editor-input { width: 100%; min-height: 40px; padding: 0 10px; border: 1px solid var(--color-border-strong); border-radius: 6px; background: var(--color-surface-solid); color: var(--color-foreground); font: inherit; }

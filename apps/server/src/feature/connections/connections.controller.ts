@@ -72,7 +72,7 @@ export class ConnectionsController {
       capabilities: parsed.data.adapter === 'postgresql' ? {
         discoverResources: true, inspectTables: true, browseData: true, mutateData: true, editSchema: true, executeSql: false,
       } : {
-        discoverResources: true, inspectTables: true, browseData: true, mutateData: true, editSchema: false, executeSql: false,
+        discoverResources: true, inspectTables: true, browseData: true, mutateData: true, editSchema: true, executeSql: false,
       },
       schemaCapabilities: parsed.data.adapter === 'postgresql' ? this.postgres.schemaCapabilities() : this.sqlserver.schemaCapabilities(),
     });
@@ -294,11 +294,10 @@ export class ConnectionsController {
     const parsed = foreignKeyFieldChoicesRequestSchema.safeParse(body);
     if (!parsed.success) throw new BadRequestException('Choose one or more local fields for the foreign key.');
     const configuration = this.sessions.requireConnection(request, response, connectionId);
-    if (configuration.adapter !== 'postgresql') {
-      throw new BadRequestException('SQL Server schema and relationship editing is not enabled yet.');
-    }
     try {
-      return await this.postgres.foreignKeyFieldChoices(configuration, schema, table, targetSchema, targetTable, parsed.data.localFieldNames);
+      return configuration.adapter === 'postgresql'
+        ? await this.postgres.foreignKeyFieldChoices(configuration, schema, table, targetSchema, targetTable, parsed.data.localFieldNames)
+        : await this.sqlserver.foreignKeyFieldChoices(configuration, schema, table, targetSchema, targetTable, parsed.data.localFieldNames);
     } catch (error) {
       if (error instanceof MigrationPlanError) throw this.asMigrationException(error);
       throw this.asSafeDatabaseException(error);
@@ -338,9 +337,10 @@ export class ConnectionsController {
     const parsed = schemaFieldDraftRequestSchema.safeParse(body);
     if (!parsed.success) throw new BadRequestException('Invalid schema field draft request.');
     const configuration = this.sessions.requireConnection(request, response, connectionId);
-    if (configuration.adapter !== 'postgresql') throw new BadRequestException('SQL Server schema editing is not enabled yet.');
     try {
-      return await this.postgres.previewSchemaFieldDraft(configuration, parsed.data);
+      return configuration.adapter === 'postgresql'
+        ? await this.postgres.previewSchemaFieldDraft(configuration, parsed.data)
+        : await this.sqlserver.previewSchemaFieldDraft(configuration, parsed.data);
     } catch (error) {
       throw this.asMigrationException(error);
     }

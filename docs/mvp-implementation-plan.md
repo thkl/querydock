@@ -1,6 +1,6 @@
 # QueryDock — MVP Implementation Plan
 
-Status: Milestones B, C, D, and E are complete by user sign-off. Milestone F is next. It covers queries and mixed runbooks, and adds SQL Server schema migration support with cross-table foreign-key dependency planning. The SQL Server adapter currently supports connection, discovery, inspection, and data workflows; schema editing remains disabled until Milestone F.
+Status: Milestones B, C, D, and E are complete by user sign-off. Milestone F is in progress. Its first implementation slice adds SQL Server foreign-key changes and dependency-aware table drops; query execution and mixed runbooks remain outstanding.
 Date: 2026-10-17.
 
 References:
@@ -153,13 +153,13 @@ Use the [Milestone E completion checklist](milestone-e-completion-checklist.md) 
 - Inline syntax help and examples for CHECK constraint expressions.
 - A visual foreign-key editor in the relationship diagram that guides users to compatible target tables and key fields.
 - A second, materially different SQL Server adapter in Milestone E to test that the client depends on shared contracts and declared capabilities rather than PostgreSQL-specific behavior. Both adapters should support the same workflows where their capabilities allow it; genuine engine differences must be reported through adapter contracts and UI capability handling.
-- SQL Server v1 supports secure connection setup, resource discovery, table/view inspection, bounded search/sort/filter/paging, safe row identity, concurrency-checked direct row changes, and adapter-generated data Runbook preview/Apply. Schema editing and foreign-key editing are explicitly unavailable for SQL Server until its DDL planner is implemented.
+- SQL Server v1 supports secure connection setup, resource discovery, table/view inspection, bounded search/sort/filter/paging, safe row identity, concurrency-checked direct row changes, and adapter-generated data Runbook preview/Apply. The initial Milestone F slice now adds permission-gated foreign-key changes and table drops; field editing, table rename, and create-table remain unavailable.
 - [x] SQL Server navigation separates tables from views, and a view page displays its adapter-provided CREATE/view definition SQL when the connected database principal has metadata permission.
 
 ### Current implementation slice
 
 - PostgreSQL runbooks can preview and apply schema plans for multiple tables as one transaction. The adapter orders foreign-key removals before referenced-key/table drops and key/field creation before new foreign keys; an inbound dependency that is not staged for removal is reported with its source table and constraint. It does not use implicit `CASCADE`.
-- The client retains separate per-table baselines and operations in the connection-scoped runbook, presents an aggregate preview, and reconciles uncertain multi-table outcomes by inspecting every affected table. Row-data batches remain single-table. SQL Server explicitly rejects cross-table schema batches until its schema planner supports them.
+- The client retains separate per-table baselines and operations in the connection-scoped runbook, presents an aggregate preview, and reconciles uncertain multi-table outcomes by inspecting every affected table. Row-data batches remain single-table. SQL Server schema batches currently support only foreign-key add/remove and table-drop operations.
 
 ### Candidate scope (to confirm)
 
@@ -185,7 +185,7 @@ Use the [Milestone E completion checklist](milestone-e-completion-checklist.md) 
 - Adding a primary key presents the available table fields for selection, supports the adapter's valid key shape, and stages the chosen fields in the runbook.
 - Adding a CHECK constraint explains the expected expression syntax with relevant examples; server-side validation errors identify how to correct invalid expressions.
 - Foreign-key editing shows target primary/unique key sets reported by the adapter, marks compatible choices, explains field-count/type mismatches, and stages only compatible references.
-- PostgreSQL and SQL Server can each connect, discover resources, inspect schemas, and browse data. SQL Server data row insert/update/delete and data Runbook workflows use SQL Server-generated queries; schema and relationship editing are capability-disabled for that adapter. Engine-specific SQL, identifiers, types, permissions, and unsupported operations remain adapter-owned and do not leak PostgreSQL assumptions into the client.
+- PostgreSQL and SQL Server can each connect, discover resources, inspect schemas, and browse data. SQL Server data row insert/update/delete and data Runbook workflows use SQL Server-generated queries; current SQL Server schema capabilities expose only foreign-key add/remove and permitted table drops. Field editing, rename, and table creation remain unavailable. Engine-specific SQL, identifiers, types, permissions, and unsupported operations remain adapter-owned and do not leak PostgreSQL assumptions into the client.
 
 Confirm keyless-table behavior and precise concurrency rules before implementing writes; initially read-only is the recommended fallback.
 

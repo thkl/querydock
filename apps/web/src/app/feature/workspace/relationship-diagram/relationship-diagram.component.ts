@@ -28,8 +28,17 @@ interface DiagramRelationship {
   pending: boolean;
 }
 
+interface PreparedRelationship {
+  sourceSchema: string;
+  sourceTable: string;
+  referencedSchema: string;
+  referencedTable: string;
+}
+
 interface FieldAnchor { left: number; right: number; y: number; }
-interface RelationshipContextMenu { x: number; y: number; relationshipIds: string[]; }
+interface RelationshipFieldRef { schema: string; table: string; fieldName: string; }
+interface PendingRelationshipEndpoint extends RelationshipFieldRef { role: 'source' | 'destination'; }
+interface RelationshipContextMenu { x: number; y: number; relationshipIds: string[]; field: RelationshipFieldRef | null; }
 
 const CARD_WIDTH = 284;
 const CANVAS_BOTTOM_PADDING = 24;
@@ -68,7 +77,11 @@ export class RelationshipDiagramComponent {
   readonly fieldSets = signal<FieldSet[]>([]);
   readonly selectedFieldSet = signal('');
   readonly constraintName = signal('');
+  readonly constraintNameEdited = signal(false);
+  readonly preferredReferencedFieldName = signal<string | null>(null);
+  readonly newRelationship = signal<PreparedRelationship | null>(null);
   readonly editingRelationship = signal<DiagramRelationship | null>(null);
+  readonly pendingRelationshipEndpoint = signal<PendingRelationshipEndpoint | null>(null);
   readonly selectedRelationshipId = signal<string | null>(null);
   readonly tablePositions = signal<Record<string, DiagramPoint>>({});
   readonly fieldAnchors = signal<Record<string, FieldAnchor>>({});
@@ -80,6 +93,10 @@ export class RelationshipDiagramComponent {
     const ids = new Set(this.contextMenu()?.relationshipIds ?? []);
     return this.relationships().filter(({ id }) => ids.has(id));
   });
+  readonly contextMenuFieldSnapshot = computed(() => {
+    const field = this.contextMenu()?.field;
+    return field ? this.snapshots().find(({ schema, name }) => schema === field.schema && name === field.table) ?? null : null;
+  });
   readonly diagramWidth = computed(() => Math.max(1, ...this.snapshots().map((snapshot, index) =>
     this.nodePosition(index).x + CARD_WIDTH + 140)));
   readonly diagramHeight = computed(() => {
@@ -88,11 +105,21 @@ export class RelationshipDiagramComponent {
   });
   readonly sourceSnapshot = computed(() => this.snapshots().find((snapshot) => this.tableKey(snapshot.schema, snapshot.name) === this.sourceKey()) ?? null);
   readonly targetSnapshot = computed(() => this.snapshots().find((snapshot) => this.tableKey(snapshot.schema, snapshot.name) === this.targetKey()) ?? null);
+  readonly suggestedConstraintName = computed(() => {
+    const source = this.sourceSnapshot();
+    const target = this.targetSnapshot();
+    if (!source || !target) return '';
+    const parts = ['fk', source.name, ...this.localFieldNames(), target.name]
+      .map((part) => part.toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, ''))
+      .filter(Boolean);
+    return parts.join('_').slice(0, 63).replace(/_+$/g, '');
+  });
   readonly selectedFieldSetOption = computed(() => this.fieldSets().find(({ fieldNames }) =>
     fieldNames.join('\u0000') === this.selectedFieldSet()) ?? null);
   private snapshotRequestId = 0;
   private fieldSetRequestId = 0;
   private loadedConnectionId: string | null = null;
+  private loadedSchemaRevision = 0;
   private restoredViewConnectionId: string | null = null;
   private dragState: { key: string; pointerId: number; startX: number; startY: number; originX: number; originY: number } | null = null;
   private readonly calculatedColumnCount = signal(COLUMN_COUNT);
@@ -101,6 +128,23 @@ export class RelationshipDiagramComponent {
     this.updateColumnCount();
     requestAnimationFrame(() => this.measureFieldAnchors());
   });
+
+  relationVisualHelper = computed(()=>{
+    const prep = this.newRelationship();
+    const edit = this.editingRelationship();
+    if (prep) {
+      return prep;
+    }
+    if (edit) {
+      return {
+        sourceSchema:edit.sourceSchema,
+        sourceTable:edit.sourceTable,
+        referencedSchema:edit.referencedSchema,
+        referencedTable:edit.referencedTable
+      }
+    }
+    return null;
+  })
 
   private readonly diagramCanvas = viewChild<ElementRef<HTMLDivElement>>('diagramCanvas');
   private readonly diagramViewport = viewChild<ElementRef<HTMLDivElement>>('diagramViewport');
@@ -141,6 +185,8 @@ export class RelationshipDiagramComponent {
         this.metadataLoadedFor.set(null);
         this.restoredViewConnectionId = null;
         this.selectedRelationshipId.set(null);
+        this.pendingRelationshipEndpoint.set(null);
+        this.editorMessage.set(null);
         this.closeContextMenu();
         this.loading.set(false);
         this.loadError.set(null);
@@ -148,21 +194,29 @@ export class RelationshipDiagramComponent {
         return;
       }
       const connectionId = connection.connectionId;
+      const schemaRevision = this.connections.schemaRevisionFor(connectionId);
       const resourceMap = this.connections.resourcesByConnection();
       const resourcesReady = resourceMap.has(connectionId);
       const resources = resourceMap.get(connectionId) ?? [];
       if (this.loadedConnectionId !== connection.connectionId) {
         const saved = this.diagramState.viewFor(connectionId);
         this.loadedConnectionId = connectionId;
+        this.loadedSchemaRevision = schemaRevision;
         this.pages.registerOpenedRelationshipDiagram(connectionId);
         this.snapshots.set(saved.snapshots ?? []);
         this.tablePositions.set(saved.tablePositions);
-        this.metadataLoadedFor.set(saved.snapshots === null ? null : connectionId);
+        this.metadataLoadedFor.set(saved.snapshots === null || saved.schemaRevision !== schemaRevision ? null : connectionId);
         this.restoredViewConnectionId = null;
         this.selectedRelationshipId.set(null);
+        this.pendingRelationshipEndpoint.set(null);
+        this.editorMessage.set(null);
         this.closeContextMenu();
         this.partialLoadCount.set(saved.partialLoadCount);
         this.loadError.set(null);
+      }
+      if (this.loadedSchemaRevision !== schemaRevision) {
+        this.loadedSchemaRevision = schemaRevision;
+        this.metadataLoadedFor.set(null);
       }
       if (this.metadataLoadedFor() !== connectionId && resourcesReady && !this.loading()) {
         void this.loadSnapshots(connection, resources);
@@ -288,7 +342,7 @@ export class RelationshipDiagramComponent {
   private updateColumnCount(viewport = this.diagramViewport()?.nativeElement): void {
     if (!viewport) return;
     const width = viewport.clientWidth || viewport.getBoundingClientRect().width;
-    const nextCount = Math.max(1, Math.floor(width / (CARD_WIDTH + COLUMN_GAP )));
+    const nextCount = Math.max(1, Math.floor(width / (CARD_WIDTH + COLUMN_GAP)));
     if (nextCount !== this.calculatedColumnCount()) this.calculatedColumnCount.set(nextCount);
   }
 
@@ -379,9 +433,12 @@ export class RelationshipDiagramComponent {
     event.preventDefault();
     event.stopPropagation();
     const matches = this.relationshipsForField(snapshot, fieldName);
-    if (!matches.length) return;
     this.selectedRelationshipId.set(matches.length === 1 ? matches[0]!.id : null);
-    this.setContextMenu(event, matches.map(({ id }) => id));
+    this.setContextMenu(event, matches.map(({ id }) => id), {
+      schema: snapshot.schema,
+      table: snapshot.name,
+      fieldName,
+    });
   }
 
   /** Finds every relationship touching a table field. */
@@ -395,6 +452,46 @@ export class RelationshipDiagramComponent {
   clearRelationshipFocus(): void {
     this.selectedRelationshipId.set(null);
     this.closeContextMenu();
+    if (this.pendingRelationshipEndpoint()) {
+      this.pendingRelationshipEndpoint.set(null);
+      this.editorMessage.set(null);
+    }
+  }
+
+  /** Starts or completes a relationship by assigning the field as source or destination. */
+  selectRelationshipEndpoint(field: RelationshipFieldRef, role: PendingRelationshipEndpoint['role']): void {
+    this.closeContextMenu();
+    const snapshot = this.snapshots().find(({ schema, name }) => schema === field.schema && name === field.table);
+    if (!snapshot) return;
+    if (role === 'source' && !this.canEditRelationships(snapshot)) {
+      this.editorMessage.set(null);
+      this.editorError.set(`${field.schema}.${field.table} cannot be used as the source because this account cannot alter it.`);
+      return;
+    }
+
+    const endpoint = { ...field, role };
+    const pending = this.pendingRelationshipEndpoint();
+    this.editorError.set(null);
+    this.selectedRelationshipId.set(null);
+    if (!pending || pending.role === role) {
+      this.pendingRelationshipEndpoint.set(endpoint);
+      const nextDirection = role === 'source' ? 'destination' : 'source';
+      this.editorMessage.set(`${role === 'source' ? 'Source' : 'Destination'} selected: ${field.schema}.${field.table}.${field.fieldName}. Choose a field as the ${nextDirection} to continue.`);
+      return;
+    }
+
+    const sourceField = role === 'source' ? endpoint : pending;
+    const destinationField = role === 'destination' ? endpoint : pending;
+    const source = this.snapshots().find(({ schema, name }) => schema === sourceField.schema && name === sourceField.table);
+    const target = this.snapshots().find(({ schema, name }) => schema === destinationField.schema && name === destinationField.table);
+    if (!source || !target || !this.canEditRelationships(source)) {
+      this.pendingRelationshipEndpoint.set(null);
+      this.editorMessage.set(null);
+      this.editorError.set('The selected source table can no longer be edited. Choose another source field.');
+      return;
+    }
+    this.pendingRelationshipEndpoint.set(null);
+    this.startNewRelationship(source, target, sourceField.fieldName, destinationField.fieldName);
   }
 
   /** Closes the currently visible relationship action menu. */
@@ -415,13 +512,22 @@ export class RelationshipDiagramComponent {
   }
 
   /** Prevents the browser menu and positions the app's context actions. */
-  private setContextMenu(event: MouseEvent, relationshipIds: string[]): void {
-    const menuHeight = Math.min(relationshipIds.length * 88 + 20, 360);
+  private setContextMenu(event: MouseEvent, relationshipIds: string[], field: RelationshipFieldRef | null = null): void {
+    const menuHeight = Math.min(relationshipIds.length * 88 + (field ? 112 : 0) + 20, 360);
     this.contextMenu.set({
-      x: Math.max(8, Math.min(event.clientX, window.innerWidth - 308)),
+      x: Math.max(8, Math.min(event.clientX, window.innerWidth - 328)),
       y: Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8)),
       relationshipIds,
+      field,
     });
+  }
+
+  /** Returns the pending relationship role for this field, if it has been selected. */
+  pendingEndpointRole(snapshot: TableSnapshot, fieldName: string): PendingRelationshipEndpoint['role'] | null {
+    const endpoint = this.pendingRelationshipEndpoint();
+    return endpoint?.schema === snapshot.schema && endpoint.table === snapshot.name && endpoint.fieldName === fieldName
+      ? endpoint.role
+      : null;
   }
 
   /** Opens the selected table schema in the workspace tab bar. */
@@ -444,31 +550,58 @@ export class RelationshipDiagramComponent {
   }
 
   /** Initializes a new foreign-key editor with the current connection's table choices. */
-  startNewRelationship(): void {
+  startNewRelationship(source?: TableSnapshot, target?: TableSnapshot, sourceFieldName?: string, targetFieldName?: string): void {
     this.fieldSetRequestId++;
     this.editorBusy.set(false);
     this.clearRelationshipFocus();
-    const firstEditable = this.snapshots().find(({ canAlter }) => canAlter);
+    const firstEditable = source ?? this.snapshots().find((snapshot) => this.canEditRelationships(snapshot));
     this.editingRelationship.set(null);
+    const prepared = {
+      sourceSchema: '',
+      sourceTable: '',
+      referencedSchema: '',
+      referencedTable: ''
+    }
+    if (source) {
+      prepared.sourceSchema = source.schema;
+      prepared.sourceTable = source.name;
+    }
+    if (target) {
+      prepared.referencedSchema = target.schema;
+      prepared.referencedTable = target.name;
+    }
+    this.newRelationship.set(prepared);
     this.sourceKey.set(firstEditable ? this.tableKey(firstEditable.schema, firstEditable.name) : '');
-    this.targetKey.set('');
-    this.localFieldNames.set([]);
+    this.targetKey.set(target ? this.tableKey(target.schema, target.name) : '');
+    this.localFieldNames.set(sourceFieldName ? [sourceFieldName] : []);
     this.constraintName.set('');
+    this.constraintNameEdited.set(false);
+    this.preferredReferencedFieldName.set(targetFieldName ?? null);
     this.fieldSets.set([]);
-    this.selectedFieldSet.set('');
+    this.selectedFieldSet.set(targetFieldName ?? '');
     this.editorError.set(null);
     this.editorMessage.set(null);
     this.editorOpen.set(true);
+    this.updateSuggestedConstraintName();
+    if (sourceFieldName && targetFieldName) void this.loadFieldSets();
+  }
+
+  /** Reports whether the active database adapter permits foreign-key changes on this table. */
+  canEditRelationships(snapshot: TableSnapshot | null | undefined): boolean {
+    return snapshot?.canEditConstraints ?? snapshot?.canAlter ?? false;
   }
 
   /** Loads a relationship's source, target, and local field selections into the editor. */
   async editRelationship(relationship: DiagramRelationship): Promise<void> {
     this.fieldSetRequestId++;
+    this.pendingRelationshipEndpoint.set(null);
     this.editingRelationship.set(relationship);
     this.sourceKey.set(this.tableKey(relationship.sourceSchema, relationship.sourceTable));
     this.targetKey.set(this.tableKey(relationship.referencedSchema, relationship.referencedTable));
     this.localFieldNames.set([...relationship.fieldNames]);
     this.constraintName.set(relationship.name);
+    this.constraintNameEdited.set(true);
+    this.preferredReferencedFieldName.set(null);
     this.selectedFieldSet.set(relationship.referencedFieldNames.join('\u0000'));
     this.editorError.set(null);
     this.editorMessage.set(null);
@@ -491,6 +624,7 @@ export class RelationshipDiagramComponent {
     this.localFieldNames.set([]);
     this.fieldSets.set([]);
     this.selectedFieldSet.set('');
+    this.updateSuggestedConstraintName();
   }
 
   /** Updates the target table and requests compatible unique-key field sets. */
@@ -498,8 +632,29 @@ export class RelationshipDiagramComponent {
     this.fieldSetRequestId++;
     this.editorBusy.set(false);
     this.targetKey.set((event.currentTarget as HTMLSelectElement).value);
+    this.preferredReferencedFieldName.set(null);
     this.selectedFieldSet.set('');
+    this.updateSuggestedConstraintName();
     void this.loadFieldSets();
+  }
+
+  /** Clears the clicked destination hint when the user manually picks a target key set. */
+  onReferencedFieldSetChanged(event: Event): void {
+    this.preferredReferencedFieldName.set(null);
+    this.selectedFieldSet.set((event.currentTarget as HTMLSelectElement).value);
+    this.editorError.set(null);
+  }
+
+  /** Tracks manual name edits so later field choices do not overwrite the user's value. */
+  onConstraintNameInput(event: Event): void {
+    this.constraintName.set((event.currentTarget as HTMLInputElement).value);
+    this.constraintNameEdited.set(true);
+  }
+
+  /** Applies the current source, local-field, and target-based name suggestion. */
+  useSuggestedConstraintName(): void {
+    this.constraintNameEdited.set(false);
+    this.constraintName.set(this.suggestedConstraintName());
   }
 
   /** Updates a local field selection and refreshes target key compatibility. */
@@ -507,7 +662,13 @@ export class RelationshipDiagramComponent {
     const checked = (event.currentTarget as HTMLInputElement).checked;
     const selected = this.localFieldNames();
     this.localFieldNames.set(checked ? [...selected, fieldName] : selected.filter((name) => name !== fieldName));
+    this.updateSuggestedConstraintName();
     await this.loadFieldSets();
+  }
+
+  /** Updates the generated name only while the user has not entered a custom name. */
+  private updateSuggestedConstraintName(): void {
+    if (!this.constraintNameEdited()) this.constraintName.set(this.suggestedConstraintName());
   }
 
   /** Stages the edited foreign-key operation in the database runbook. */
@@ -622,6 +783,7 @@ export class RelationshipDiagramComponent {
   /** Loads table metadata in bounded batches and records partial-load information. */
   private async loadSnapshots(connection: ConnectResponse, resources: ResourceDescriptor[]): Promise<void> {
     const requestId = ++this.snapshotRequestId;
+    const schemaRevision = this.connections.schemaRevisionFor(connection.connectionId);
     const tables = resources.filter(({ kind }) => kind === 'table' || kind === 'partitionedTable');
     this.loading.set(true);
     this.loadError.set(null);
@@ -643,10 +805,12 @@ export class RelationshipDiagramComponent {
         this.snapshots.set(snapshots);
         this.partialLoadCount.set(failedCount);
         if (snapshots.length || failedCount === 0) {
-          this.diagramState.saveSnapshots(connection.connectionId, snapshots, failedCount);
+          this.diagramState.saveSnapshots(connection.connectionId, snapshots, failedCount, schemaRevision);
         }
       }
-      this.metadataLoadedFor.set(connection.connectionId);
+      this.metadataLoadedFor.set(this.connections.schemaRevisionFor(connection.connectionId) === schemaRevision
+        ? connection.connectionId
+        : null);
       if (failedCount && !snapshots.length) {
         this.loadError.set('No table metadata could be loaded. Check database visibility and permissions, then refresh.');
       }
@@ -656,7 +820,9 @@ export class RelationshipDiagramComponent {
       }
     } finally {
       if (requestId === this.snapshotRequestId && this.connections.activeConnectionId() === connection.connectionId) {
-        this.metadataLoadedFor.set(connection.connectionId);
+        this.metadataLoadedFor.set(this.connections.schemaRevisionFor(connection.connectionId) === schemaRevision
+          ? connection.connectionId
+          : null);
         this.loading.set(false);
       }
     }
@@ -691,11 +857,23 @@ export class RelationshipDiagramComponent {
         || this.targetSnapshot()?.fingerprint !== target.fingerprint
         || this.localFieldNames().join('\u0000') !== localFieldNames.join('\u0000')) return;
       this.fieldSets.set(result.fieldSets);
-      const selected = result.fieldSets.find(({ fieldNames }) => fieldNames.join('\u0000') === this.selectedFieldSet())
+      const preferredFieldName = this.preferredReferencedFieldName();
+      const preferred = preferredFieldName
+        ? result.fieldSets.find(({ fieldNames }) => fieldNames.length === 1 && fieldNames[0] === preferredFieldName)
+        : undefined;
+      const selected = preferredFieldName
+        ? preferred
+        : result.fieldSets.find(({ fieldNames }) => fieldNames.join('\u0000') === this.selectedFieldSet())
         ?? result.fieldSets.find(({ compatible }) => compatible)
         ?? result.fieldSets[0];
       this.selectedFieldSet.set(selected?.fieldNames.join('\u0000') ?? '');
-      if (!result.fieldSets.length) this.editorError.set('The selected table has no primary or unique key to reference.');
+      if (!result.fieldSets.length) {
+        this.editorError.set(preferredFieldName
+          ? `The selected destination field "${preferredFieldName}" is not an available primary or unique key. This table has no candidate key to reference.`
+          : 'The selected table has no primary or unique key to reference.');
+      } else if (preferredFieldName && !preferred) {
+        this.editorError.set(`The selected destination field "${preferredFieldName}" is not a single-column primary or unique key. Choose a listed key set or select another destination field.`);
+      }
     } catch (error) {
       if (requestId === this.fieldSetRequestId) {
         this.editorError.set(error instanceof Error ? error.message : 'Unable to load compatible target keys.');
@@ -732,7 +910,7 @@ export class RelationshipDiagramComponent {
             referencedSchema: operation.referencedSchema,
             referencedTable: operation.referencedTable,
             referencedFieldNames: operation.referencedFieldNames,
-            editable: change.baseline?.canAlter ?? false,
+            editable: this.canEditRelationships(change.baseline),
             pending: true,
           });
         }

@@ -92,6 +92,7 @@ export const resourceDescriptorSchema = z.object({
   name: z.string(),
   kind: z.enum(['table', 'partitionedTable', 'view', 'materializedView', 'foreignTable']),
   isUpdatable: z.boolean(),
+  canBrowseData: z.boolean().optional(),
   canCreateTable: z.boolean(),
 });
 
@@ -114,6 +115,8 @@ export const tableFieldDescriptorSchema = z.object({
   identityGeneration: z.enum(['always', 'byDefault']).nullable(),
   generated: z.boolean(),
   generationExpression: z.string().nullable(),
+  /** SQL Server names a default as a table constraint, which the adapter needs to replace it. */
+  defaultConstraintName: z.string().nullable().optional(),
 });
 
 export type TableFieldDescriptor = z.infer<typeof tableFieldDescriptorSchema>;
@@ -165,6 +168,12 @@ export const tableSnapshotSchema = z.object({
   kind: resourceDescriptorSchema.shape.kind,
   definitionSql: z.string().nullable().optional(),
   canAlter: z.boolean(),
+  canBrowseData: z.boolean().optional(),
+  /** Adapter-specific capabilities for schema operations narrower than general ALTER support. */
+  canEditFields: z.boolean().optional(),
+  canEditConstraints: z.boolean().optional(),
+  canRenameTable: z.boolean().optional(),
+  canDropTable: z.boolean().optional(),
   fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
   editableFieldTypes: z.array(editableFieldTypeDescriptorSchema),
   editableConstraintKinds: z.array(z.object({ value: editableConstraintKindSchema, label: z.string() })),

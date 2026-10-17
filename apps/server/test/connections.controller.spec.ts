@@ -91,6 +91,7 @@ describe('ConnectionsController', () => {
       listResources: vi.fn().mockResolvedValue([{ schema: 'dbo', name: 'customers', kind: 'table', isUpdatable: true, canCreateTable: false }]),
       editableFieldTypes: vi.fn().mockReturnValue([]),
       inspectTable: vi.fn().mockResolvedValue({ schema: 'dbo', name: 'customers' }),
+      foreignKeyFieldChoices: vi.fn().mockResolvedValue({ fieldSets: [] }),
       queryTableData: vi.fn().mockResolvedValue({ columns: [], rows: [], totalRows: 0 }),
       updateTableDataRow: vi.fn(),
       insertTableDataRow: vi.fn(),
@@ -125,7 +126,7 @@ describe('ConnectionsController', () => {
     expect(sqlserver.verifyConnection).toHaveBeenCalledWith(sqlServerConfig);
     expect(sessions.addConnection).toHaveBeenCalledWith(expect.anything(), expect.anything(), sqlServerConfig, expect.objectContaining({
       serverVersion: '16.0',
-      capabilities: expect.objectContaining({ browseData: true, mutateData: true, editSchema: false }),
+      capabilities: expect.objectContaining({ browseData: true, mutateData: true, editSchema: true }),
     }));
   });
 
@@ -202,6 +203,19 @@ describe('ConnectionsController', () => {
     await expectHttpFailure(controller.foreignKeyFieldChoices(connectionId, 'public', 'child', 'public', 'parent', {
       localFieldNames: ['parent_id'],
     }, request(), response()), 400);
+  });
+
+  it('dispatches foreign-key field choices to the SQL Server adapter', async () => {
+    const sqlServerConfig = {
+      adapter: 'sqlserver', host: 'localhost', port: 1433, database: 'querydock_test',
+      username: 'tester', password: 'secret', encrypt: true, trustServerCertificate: false,
+    } as const;
+    sessions.requireConnection.mockReturnValueOnce(sqlServerConfig);
+    await expect(controller.foreignKeyFieldChoices(connectionId, 'dbo', 'child', 'dbo', 'parent', {
+      localFieldNames: ['parent_id'],
+    }, request(), response())).resolves.toEqual({ fieldSets: [] });
+    expect(sqlserver.foreignKeyFieldChoices).toHaveBeenCalledWith(sqlServerConfig, 'dbo', 'child', 'dbo', 'parent', ['parent_id']);
+    expect(postgres.foreignKeyFieldChoices).not.toHaveBeenCalled();
   });
 
   it('validates migration preview and maps migration error kinds', async () => {

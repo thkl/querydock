@@ -39,6 +39,7 @@ export class ConnectionApiService {
   readonly activeConnectionId = signal<string | null>(null);
   readonly resourcesByConnection = signal<ReadonlyMap<string, ResourceDescriptor[]>>(new Map());
   readonly resourceErrorsByConnection = signal<ReadonlyMap<string, string>>(new Map());
+  private readonly schemaRevisions = signal<ReadonlyMap<string, number>>(new Map());
   readonly activeConnection = computed(
     () => this.connections().find(({ connectionId }) => connectionId === this.activeConnectionId()) ?? null,
   );
@@ -358,6 +359,20 @@ export class ConnectionApiService {
   /** Refreshes a connection's resource cache after a schema change. */
   refreshResources(connectionId: string): Promise<ResourceDescriptor[]> {
     return this.loadResources(connectionId);
+  }
+
+  /** Returns the in-memory schema revision for one connection so metadata caches can detect applied changes. */
+  schemaRevisionFor(connectionId: string): number {
+    return this.schemaRevisions().get(connectionId) ?? 0;
+  }
+
+  /** Invalidates schema metadata consumers after a confirmed schema migration. */
+  markSchemaChanged(connectionId: string): void {
+    this.schemaRevisions.update((current) => {
+      const next = new Map(current);
+      next.set(connectionId, (current.get(connectionId) ?? 0) + 1);
+      return next;
+    });
   }
 
   /** Stores a resource-load failure without discarding the last known connection. */

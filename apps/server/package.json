@@ -10,7 +10,7 @@
     "typecheck": "tsc -p tsconfig.build.json --noEmit",
     "test": "pnpm -w exec vitest run --config apps/server/vitest.config.mts",
     "test:watch": "pnpm -w exec vitest --config apps/server/vitest.config.mts",
-    "test:integration": "pnpm -w exec vitest run --config apps/server/vitest.config.mts apps/server/test/postgres-migration.integration.spec.ts"
+    "test:integration": "pnpm -w exec vitest run --config apps/server/vitest.config.mts apps/server/test/postgres-migration.integration.spec.ts apps/server/test/sqlserver-migration.integration.spec.ts"
   },
   "dependencies": {
     "@nestjs/common": "12.1.2",

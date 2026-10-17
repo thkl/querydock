@@ -187,10 +187,10 @@ describe('PostgreSQL schema migration planning', () => {
   });
 
   it('rejects unsupported lifecycle combinations and duplicate or missing constraint operations', () => {
-    expect(preview([
+    expect(() => preview([
       { kind: 'renameTable', newName: 'renamed' },
       { kind: 'addNullableField', name: 'new', type: 'text' },
-    ])).toEqual(['ALTER TABLE "sales data"."order items" RENAME TO "renamed";']);
+    ])).toThrow(/Rename a table in its own runbook plan/);
     expect(() => preview([{ kind: 'renameTable', newName: snapshot.name }])).toThrow(/different name/);
     expect(() => preview([{ kind: 'dropConstraint', name: 'missing_constraint' }])).toThrow(/no longer exists/);
     expect(() => preview([

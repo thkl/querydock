@@ -55,7 +55,7 @@ Adapters own:
 - Identifier quoting, dialect-specific SQL, and dependency ordering.
 - SQL query execution and transactional runbook application.
 
-The SQL Server adapter currently supports connection, resource discovery, schema inspection, bounded data browsing, and guarded row insert/update/delete operations, including data Runbook preview and Apply. Schema and relationship editing remain PostgreSQL-only until SQL Server dialect generation and dependency handling are implemented; the connection advertises this through `editSchema: false`.
+The SQL Server adapter supports connection, resource discovery, schema inspection, bounded data browsing, and guarded row insert/update/delete operations, including data Runbook preview and Apply. Its initial schema migration scope supports permission-gated foreign-key addition/removal and dependency-aware table drops in atomic cross-table batches. Field editing, table rename, and table creation remain unavailable. Snapshots advertise these narrower capabilities separately from `canAlter`; the connection advertises schema workflow support through `editSchema` while individual actions stay adapter- and permission-gated.
 
 Keep capabilities, type/editor descriptors, and current resource metadata distinct. Fetch capabilities per connection because engine version, extensions, and permissions affect behavior. Preserve engine-specific information through extensions rather than forcing every engine into PostgreSQL's feature set.
 

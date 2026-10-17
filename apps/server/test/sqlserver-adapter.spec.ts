@@ -59,6 +59,54 @@ describe('SQL Server adapter shared contracts and SQL generation', () => {
     })]);
   });
 
+  it('marks only foreign keys editable when the active role can alter the source table', () => {
+    const rows = [
+      { constraintName: 'fk_child', constraintType: 'F', fieldName: 'parent_id', keyOrdinal: 1,
+        referencedSchema: 'dbo', referencedTable: 'parent', referencedFieldName: 'id', definition: null },
+      { constraintName: 'uq_child', constraintType: 'UQ', fieldName: 'code', keyOrdinal: 1,
+        referencedSchema: null, referencedTable: null, referencedFieldName: null, definition: null },
+    ];
+    expect(sqlServerInternals.mapConstraints(rows, true)).toEqual([
+      expect.objectContaining({ name: 'fk_child', kind: 'foreignKey', editable: true }),
+      expect.objectContaining({ name: 'uq_child', kind: 'unique', editable: false }),
+    ]);
+  });
+
+  it('generates quoted FK and drop statements and plans inbound FK removals before table drops', () => {
+    expect(sqlServerInternals.addForeignKeyStatement('sales data', 'child]table', 'fk_child', ['parent id'], 'dbo', 'parent', ['id']))
+      .toBe('ALTER TABLE [sales data].[child]]table] WITH CHECK ADD CONSTRAINT [fk_child] FOREIGN KEY ([parent id]) REFERENCES [dbo].[parent] ([id]);');
+    expect(sqlServerInternals.dropForeignKeyStatement('dbo', 'child', 'fk_child'))
+      .toBe('ALTER TABLE [dbo].[child] DROP CONSTRAINT [fk_child];');
+    expect(sqlServerInternals.dropTableStatement('dbo', 'parent')).toBe('DROP TABLE [dbo].[parent];');
+    const inbound = [
+      { schema: 'dbo', table: 'child', name: 'fk_child' },
+      { schema: 'dbo', table: 'other_child', name: 'fk_other' },
+    ];
+    expect(sqlServerInternals.unresolvedInboundForeignKeys(inbound, new Set([JSON.stringify(['dbo', 'child', 'fk_child'])])))
+      .toEqual([{ schema: 'dbo', table: 'other_child', name: 'fk_other' }]);
+  });
+
+  it('checks SQL Server FK types and dimensions conservatively', () => {
+    const intField = snapshot.fields[0]!;
+    const sameInt = { ...intField, name: 'id' };
+    const bigint = { ...sameInt, typeName: 'bigint', dataType: 'bigint' };
+    const varchar = { ...snapshot.fields[1]!, typeName: 'varchar', dataType: 'varchar(120)' };
+    const char = { ...varchar, typeName: 'char', dataType: 'char(120)' };
+    const differentSize = { ...varchar, characterMaximumLength: 121, dataType: 'varchar(121)' };
+    const binary = { ...intField, typeName: 'binary', dataType: 'binary(8)' };
+    const varbinary = { ...intField, typeName: 'varbinary', dataType: 'varbinary(8)' };
+    const varbinaryDifferentSize = { ...intField, typeName: 'varbinary', dataType: 'varbinary(9)' };
+    const datetime2 = { ...intField, typeName: 'datetime2', dataType: 'datetime2(3)' };
+    const datetime2DifferentScale = { ...intField, typeName: 'datetime2', dataType: 'datetime2(7)' };
+    expect(sqlServerInternals.sqlServerTypesCompatible(intField, sameInt)).toBe(true);
+    expect(sqlServerInternals.sqlServerTypesCompatible(intField, bigint)).toBe(false);
+    expect(sqlServerInternals.sqlServerTypesCompatible(char, varchar)).toBe(true);
+    expect(sqlServerInternals.sqlServerTypesCompatible(varchar, differentSize)).toBe(false);
+    expect(sqlServerInternals.sqlServerTypesCompatible(binary, varbinary)).toBe(true);
+    expect(sqlServerInternals.sqlServerTypesCompatible(binary, varbinaryDifferentSize)).toBe(false);
+    expect(sqlServerInternals.sqlServerTypesCompatible(datetime2, datetime2DifferentScale)).toBe(false);
+  });
+
   it('keeps row versions stable and disables writes for unsupported SQL Server types', () => {
     const row = { 'tenant id': '7', label: 'customer' };
     expect(sqlServerInternals.rowVersion(snapshot.fields, row)).toBe(sqlServerInternals.rowVersion(snapshot.fields, row));

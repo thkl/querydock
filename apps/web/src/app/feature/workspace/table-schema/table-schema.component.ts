@@ -119,9 +119,13 @@ export class TableSchemaComponent {
       dataType: field.editableType ?? field.dataType,
       typeDetails: field.characterMaximumLength !== null
         ? String(field.characterMaximumLength)
-        : field.dataType === 'numeric' && field.numericPrecision !== null
-          ? `${field.numericPrecision}${field.numericScale !== null ? `, ${field.numericScale}` : ''}`
-          : '',
+        : ['varchar', 'nvarchar', 'varbinary'].includes(field.editableType ?? '') && field.dataType.toLowerCase().endsWith('(max)')
+          ? 'max'
+          : ['numeric', 'float'].includes(field.editableType ?? '') && field.numericPrecision !== null
+            ? `${field.numericPrecision}${field.editableType === 'numeric' && field.numericScale !== null ? `, ${field.numericScale}` : ''}`
+            : ['datetime2', 'datetimeoffset', 'time'].includes(field.editableType ?? '') && field.numericScale !== null
+              ? String(field.numericScale)
+              : '',
       typeIdentity: `${field.typeSchema}.${field.typeName}`,
       nullable: field.nullable,
       defaultValue: field.generated
@@ -217,12 +221,12 @@ export class TableSchemaComponent {
   readonly constraintDatasource = new AgridDataSource<SchemaConstraintRow>();
   readonly editableFieldGridProvider: AgridProvider<SchemaFieldRow>;
   readonly readonlyFieldGridProvider: AgridProvider<SchemaFieldRow>;
-  readonly fieldGridProvider = computed(() => this.snapshot()?.canAlter && !this.stagingField()
+  readonly fieldGridProvider = computed(() => this.canEditFields() && !this.stagingField()
     ? this.editableFieldGridProvider
     : this.readonlyFieldGridProvider);
   readonly editableConstraintGridProvider: AgridProvider<SchemaConstraintRow>;
   readonly readonlyConstraintGridProvider: AgridProvider<SchemaConstraintRow>;
-  readonly constraintGridProvider = computed(() => this.snapshot()?.canAlter
+  readonly constraintGridProvider = computed(() => this.canEditConstraints()
     && Boolean(this.snapshot()?.editableConstraintKinds.length) && !this.stagingField()
     ? this.editableConstraintGridProvider
     : this.readonlyConstraintGridProvider);
@@ -429,7 +433,7 @@ export class TableSchemaComponent {
   /** Opens the inline table rename editor using the current table name. */
   beginTableRename(): void {
     const table = this.snapshot();
-    if (!table?.canAlter) return;
+    if (!table || !this.canRenameTable()) return;
     this.tableNameDraft.set(table.name);
     this.tableRenameError.set(null);
     this.renamingTable.set(true);
@@ -466,7 +470,7 @@ export class TableSchemaComponent {
   async stageTableDrop(): Promise<void> {
     const table = this.snapshot();
     const connection = this.connections.activeConnection();
-    if (!table?.canAlter || !connection) return;
+    if (!table || !connection || !this.canDropTable()) return;
     this.stagingField.set(true);
     this.stageError.set(null);
     try {
@@ -492,9 +496,43 @@ export class TableSchemaComponent {
   openDataView(): void {
     const connection = this.connections.activeConnection();
     const table = this.snapshot();
-    if (connection && table && connection.capabilities.browseData) {
+    if (connection && table && (table.canBrowseData ?? connection.capabilities.browseData)) {
       this.workspacePages.openTableData(connection.connectionId, table.schema, table.name);
     }
+  }
+
+  /** Reports field-edit permission while keeping older adapter snapshots compatible with canAlter. */
+  canEditFields(): boolean {
+    const table = this.snapshot();
+    return table?.canEditFields ?? table?.canAlter ?? false;
+  }
+
+  /** Reports constraint-edit permission while keeping older adapter snapshots compatible with canAlter. */
+  canEditConstraints(): boolean {
+    const table = this.snapshot();
+    return table?.canEditConstraints ?? table?.canAlter ?? false;
+  }
+
+  /** Reports table rename permission, falling back to the legacy broad capability. */
+  canRenameTable(): boolean {
+    const table = this.snapshot();
+    return table?.canRenameTable ?? table?.canAlter ?? false;
+  }
+
+  /** Reports table drop permission, falling back to the legacy broad capability. */
+  canDropTable(): boolean {
+    const table = this.snapshot();
+    return table?.canDropTable ?? table?.canAlter ?? false;
+  }
+
+  /** Reports whether this adapter permits a table lifecycle operation. */
+  canStageTableOperations(): boolean {
+    return this.canRenameTable() || this.canDropTable();
+  }
+
+  /** Reports any schema capability surfaced by the current adapter. */
+  canStageSchemaOperations(): boolean {
+    return this.canEditFields() || this.canEditConstraints() || this.canStageTableOperations();
   }
 
   /** Prepares a constraint row with stable draft metadata for grid editing. */
@@ -633,7 +671,7 @@ export class TableSchemaComponent {
 
     const connection = this.connections.activeConnection();
     const snapshot = this.snapshot();
-    if (!connection || !snapshot?.canAlter) {
+    if (!connection || !snapshot || !this.canEditConstraints()) {
       this.constraintDatasource.setData(this.displayConstraints());
       return;
     }
@@ -798,7 +836,7 @@ export class TableSchemaComponent {
   private async stageConstraint(row: SchemaConstraintRow): Promise<void> {
     const connection = this.connections.activeConnection();
     const snapshot = this.snapshot();
-    if (this.stagingField() || !connection || !snapshot?.canAlter) return;
+    if (this.stagingField() || !connection || !snapshot || !this.canEditConstraints()) return;
     let operation: Extract<SchemaOperation, { kind: 'addConstraint' | 'dropConstraint' }> | null = null;
     const replacementName = row.sourceName ?? row.operationName ?? row.name.trim();
     const isDraftAdd = row.isGridInput || (row.sourceName === null && row.isUncommitted);
@@ -908,7 +946,7 @@ export class TableSchemaComponent {
     const connection = this.connections.activeConnection();
     const snapshot = this.snapshot();
     this.stageError.set(null);
-    if (!connection || !snapshot?.canAlter) return;
+    if (!connection || !snapshot || !this.canEditFields()) return;
     this.stagingField.set(true);
     try {
       const draft: SchemaFieldDraftRequest['draft'] = {

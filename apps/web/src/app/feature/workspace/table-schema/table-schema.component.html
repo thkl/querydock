@@ -42,7 +42,7 @@
       } @else {
       <div class="table-title-row">
         <h1>{{ table.name }}</h1>
-        @if (table.canAlter && pendingTableOperation()?.kind !== 'dropTable') {
+        @if (canRenameTable() && pendingTableOperation()?.kind !== 'dropTable') {
         <button class="table-title-edit" type="button" [disabled]="stagingField()" aria-label="Rename table"
           title="Rename table" (click)="beginTableRename()">
           <svg viewBox="0 0 20 20" aria-hidden="true">
@@ -56,18 +56,24 @@
         {{ connections.activeConnection()?.target?.adapter === 'sqlserver' ? 'Microsoft SQL Server' : 'PostgreSQL' }}</p>
     </div>
     <div class="schema-heading-actions">
-      @if (connections.activeConnection()?.capabilities?.browseData) {
+      @if (table.canBrowseData ?? connections.activeConnection()?.capabilities?.browseData) {
       <button class="subtle-button" type="button" (click)="openDataView()">Browse data</button>
       }
-      @if (table.canAlter) {
-      <span class="readonly-badge"><span aria-hidden="true">◈</span> CAN STAGE CHANGES</span>
+      @if (canStageSchemaOperations()) {
+      <span class="readonly-badge"><span aria-hidden="true">◈</span> SCHEMA ACTIONS AVAILABLE</span>
       } @else {
       <span class="readonly-badge"><span aria-hidden="true">◈</span> READ ONLY</span>
       }
     </div>
   </header>
 
-  @if (table.canAlter) {
+  @if (!canStageSchemaOperations()) {
+  <p class="permission-notice" role="status">
+    This database account cannot modify this table’s schema. Ask your database administrator to grant the required table alteration or ownership permissions.
+  </p>
+  }
+
+  @if (canStageTableOperations()) {
   <section class="table-actions" aria-label="Table actions">
     @if (pendingTableOperation(); as pendingTable) {
     <span class="table-action-pending" role="status">
@@ -77,7 +83,7 @@
     <button class="subtle-button" type="button" [disabled]="stagingField()" (click)="cancelTableOperation()">Cancel
       staged action</button>
     }
-    @if (pendingTableOperation()?.kind !== 'dropTable' && !renamingTable()) {
+    @if (canDropTable() && pendingTableOperation()?.kind !== 'dropTable' && !renamingTable()) {
     <button class="table-drop-button" type="button" [disabled]="stagingField()" (click)="stageTableDrop()">Stage table
       drop</button>
     }
@@ -89,7 +95,7 @@
       <div>
         <h2 id="fields-title">Fields</h2>
         <p>{{ displayFields().length }} {{ displayFields().length === 1 ? 'field' : 'fields' }}</p>
-        @if (table.canAlter) {
+        @if (canEditFields()) {
         <p class="fields-instructions">Use <strong>Add row</strong> to add a field, or edit a supported field’s name,
           type, size, default, or identity generation. Choose a type-matched default preset or enter a custom SQL
           expression. Integer auto-increment is available through Identity for smallint, integer, and bigint fields.</p>
@@ -113,9 +119,11 @@
         (cellEdit)="onFieldCellEdit($event)" (recordEdit)="onFieldRecordEdit($event)"
         (rowRemoved)="onFieldRowRemoved($event)" />
     </div>
+    @if (canEditFields()) {
     <p class="fields-instructions fields-instructions--detail">Type parameters and defaults are checked by the connected
       database. Enter the parameters supported for the selected type; enter — to remove a default. Adding identity
       generation to an existing nullable field requires all existing values to be non-null.</p>
+    }
     @if (!runbook.storageAvailable()) {
     <p class="storage-warning" role="status">Browser storage is unavailable. Runbook changes will not survive a reload.
     </p>
@@ -144,10 +152,8 @@
         <h2 id="constraints-title">Constraints</h2>
         <p>{{ visibleConstraintCount() }} {{ visibleConstraintCount() === 1 ? 'constraint' : 'constraints' }}</p>
         @if (table.editableConstraintKinds.length) {
-        <p class="fields-instructions">Use <strong>Add row</strong> to stage a primary key, unique, foreign key, or
-          CHECK constraint. For primary keys, use <strong>Primary key fields</strong> to select and order columns. Use
-          <strong>CHECK helper</strong> to build an expression. For foreign keys, open the Reference cell to choose a
-          table and compatible key fields. Delete an editable constraint row to stage its removal; delete a
+        <p class="fields-instructions">Use <strong>Add row</strong> to stage a supported constraint. For foreign keys,
+          open the Reference cell to choose a table and compatible key fields. Delete an editable constraint row to stage its removal; delete a
           <strong>DROP PENDING</strong> row again to cancel that drop.</p>
         }
       </div>
@@ -312,7 +318,7 @@
   }
 
   <footer class="schema-footer">
-    @if (table.canAlter) {
+    @if (canStageSchemaOperations()) {
     <span><span class="status-dot"></span> Schema drafts stay in the runbook until you apply them</span>
     } @else {
     <span><span class="status-dot"></span> Read only · this database role cannot alter this resource</span>

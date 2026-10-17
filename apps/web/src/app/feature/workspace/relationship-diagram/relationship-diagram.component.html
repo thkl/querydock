@@ -10,11 +10,17 @@
         <button class="secondary-button" type="button" [disabled]="loading()" (click)="refresh()">
           @if (loading()) { Refreshing… } @else { Refresh diagram }
         </button>
-        <button class="primary-button" type="button" [disabled]="!snapshots().some((snapshot) => snapshot.canAlter) || runbook.previewing()" (click)="startNewRelationship()">
+        <button class="primary-button" type="button" [disabled]="!snapshots().some((snapshot) => canEditRelationships(snapshot)) || runbook.previewing()" (click)="startNewRelationship()">
           Add relationship
         </button>
       </div>
     </header>
+
+    @if (!loading() && snapshots().length && !snapshots().some((snapshot) => canEditRelationships(snapshot))) {
+      <p class="warning-message permission-notice" role="status">
+        This database account cannot modify relationships. It needs permission to alter the source table and reference the target table; ask your database administrator to update its permissions.
+      </p>
+    }
 
     @if (runbook.noticeLabel()) {
       <div class="runbook-notice" role="status">
@@ -45,7 +51,7 @@
       <div class="diagram-meta">
         <span>{{ snapshots().length }} tables</span>
         <span>{{ relationships().length }} relationships</span>
-        <span class="diagram-help">Drag a table by its header · click a line or field to focus · right-click for actions · click the canvas to clear focus</span>
+        <span class="diagram-help">Drag tables by their headers · click a line or field to focus · right-click field rows to choose source or destination</span>
       </div>
       <div #diagramViewport class="diagram-viewport" role="region" aria-label="Database relationship diagram" tabindex="0" (scroll)="saveViewport($event)" (click)="clearRelationshipFocus()">
         <div #diagramCanvas class="diagram-canvas" [style.width.px]="diagramWidth()" [style.height.px]="diagramHeight()">
@@ -86,19 +92,24 @@
               <ul class="field-list" [attr.aria-label]="'Fields in ' + snapshot.name">
                 @for (field of snapshot.fields; track field.name) {
                   <li [attr.data-table-key]="nodeKey(snapshot)" [attr.data-field-name]="field.name"
+                    [class.is-pending-source]="pendingEndpointRole(snapshot, field.name) === 'source'"
+                    [class.is-pending-destination]="pendingEndpointRole(snapshot, field.name) === 'destination'"
                     [class.is-related-field]="isRelationshipField(snapshot, field.name)"
                     (click)="onFieldClick($event, snapshot, field.name)" (contextmenu)="openFieldContext($event, snapshot, field.name)">
                     <span class="field-name">{{ field.name }}</span>
                     <span class="field-type">{{ field.dataType }}</span>
                     <span class="key-tags">
                       @for (kind of fieldKeyKinds(snapshot, field.name); track kind) { <span class="key-tag">{{ kind }}</span> }
+                      @if (pendingEndpointRole(snapshot, field.name); as endpointRole) {
+                        <span class="endpoint-tag">{{ endpointRole === 'source' ? 'SOURCE' : 'TARGET' }}</span>
+                      }
                     </span>
                   </li>
                 }
               </ul>
               <footer class="table-card-footer">
                 <span>{{ relationshipsFor(snapshot).length }} foreign key{{ relationshipsFor(snapshot).length === 1 ? '' : 's' }}</span>
-                @if (!snapshot.canAlter) { <span class="read-only-label">Read only</span> }
+                @if (!canEditRelationships(snapshot)) { <span class="read-only-label">Read only</span> }
               </footer>
             </article>
           }
@@ -111,6 +122,17 @@
   @if (contextMenu(); as menu) {
     <button class="context-menu-backdrop" type="button" aria-label="Close relationship menu" (click)="closeContextMenu()"></button>
     <div class="relationship-context-menu" role="menu" [style.left.px]="menu.x" [style.top.px]="menu.y" (click)="$event.stopPropagation()" (contextmenu)="$event.preventDefault()">
+      @if (menu.field; as field) {
+        <section class="context-menu-group">
+          <p class="context-menu-label">{{ field.schema }}.{{ field.table }}.{{ field.fieldName }}</p>
+          <button type="button" role="menuitem" [disabled]="!canEditRelationships(contextMenuFieldSnapshot())"
+            [title]="canEditRelationships(contextMenuFieldSnapshot()) ? 'Start a relationship from this field' : 'This account cannot alter this table'"
+            (click)="selectRelationshipEndpoint(field, 'source')">New relationship with {{ field.fieldName }} as source</button>
+          <button type="button" role="menuitem" (click)="selectRelationshipEndpoint(field, 'destination')">
+            New relationship with {{ field.fieldName }} as destination
+          </button>
+        </section>
+      }
       @for (relationship of contextMenuRelationships(); track relationship.id) {
         <section class="context-menu-group">
           @if (contextMenuRelationships().length > 1) {
@@ -140,14 +162,22 @@
           <button class="close-button" type="button" aria-label="Close relationship editor" [disabled]="editorBusy()" (click)="closeEditor()">×</button>
         </header>
 
-        <label class="editor-label" for="relationship-name">Constraint name</label>
-        <input id="relationship-name" class="editor-input" [value]="constraintName()" maxlength="63" (input)="constraintName.set($any($event.target).value)" placeholder="fk_orders_customers" />
+        <div class="editor-label-row">
+          <label class="editor-label" for="relationship-name">Constraint name</label>
+          @if (!editingRelationship() && suggestedConstraintName()) {
+            <button class="suggestion-button" type="button" (click)="useSuggestedConstraintName()">Use suggestion</button>
+          }
+        </div>
+        <input id="relationship-name" class="editor-input" [value]="constraintName()" maxlength="63" (input)="onConstraintNameInput($event)" [placeholder]="suggestedConstraintName() || 'fk_orders_customer_id_customers'" />
+        @if (!editingRelationship() && suggestedConstraintName()) {
+          <p class="editor-hint name-suggestion">Suggested: <code>{{ suggestedConstraintName() }}</code></p>
+        }
 
         <label class="editor-label" for="relationship-source">From table</label>
         <select id="relationship-source" class="editor-input" [value]="sourceKey()" [disabled]="!!editingRelationship()" (change)="onSourceChanged($event)">
           <option value="">Choose source table…</option>
           @for (snapshot of snapshots(); track nodeKey(snapshot)) {
-            @if (snapshot.canAlter) { <option [value]="nodeKey(snapshot)" [selected]="snapshot.schema===editingRelationship()?.sourceSchema && snapshot.name === editingRelationship()?.sourceTable">{{ snapshot.schema }}.{{ snapshot.name }}</option> }
+            @if (canEditRelationships(snapshot)) { <option [value]="nodeKey(snapshot)" [selected]="relationVisualHelper()?.sourceSchema===snapshot.schema &&  relationVisualHelper()?.sourceTable=== snapshot.name">{{ snapshot.schema }}.{{ snapshot.name }}</option> }
           }
         </select>
 
@@ -167,7 +197,7 @@
         <select id="relationship-target" class="editor-input" [value]="targetKey()" (change)="onTargetChanged($event)">
           <option value="">Choose target table…</option>
           @for (snapshot of snapshots(); track nodeKey(snapshot)) {
-            <option [value]="nodeKey(snapshot)" [selected]="snapshot.schema===editingRelationship()?.referencedSchema && snapshot.name === editingRelationship()?.referencedTable">{{ snapshot.schema }}.{{ snapshot.name }}</option>
+            <option [value]="nodeKey(snapshot)" [selected]="snapshot.schema===relationVisualHelper()?.referencedSchema && snapshot.name === relationVisualHelper()?.referencedTable">{{ snapshot.schema }}.{{ snapshot.name }}</option>
           }
         </select>
 
@@ -176,7 +206,7 @@
             <p class="editor-hint" role="status">Checking target keys with the database adapter…</p>
           } @else if (fieldSets().length) {
             <label class="editor-label" for="relationship-target-fields">Referenced key fields</label>
-            <select id="relationship-target-fields" class="editor-input" [value]="selectedFieldSet()" (change)="selectedFieldSet.set($any($event.target).value)">
+            <select id="relationship-target-fields" class="editor-input" [value]="selectedFieldSet()" (change)="onReferencedFieldSetChanged($event)">
               @for (fieldSet of fieldSets(); track fieldSet.fieldNames.join(',')) {
                 <option [value]="fieldSet.fieldNames.join('\u0000')" [disabled]="!fieldSet.compatible">
                   {{ fieldSet.label }}{{ fieldSet.compatible ? ' · compatible' : ' · incompatible' }}
@@ -196,7 +226,7 @@
         <footer class="editor-actions">
           <button class="secondary-button" type="button" [disabled]="editorBusy()" (click)="closeEditor()">Cancel</button>
           <button class="primary-button" type="button"
-            [disabled]="editorBusy() || !sourceSnapshot()?.canAlter || !selectedFieldSetOption()?.compatible || !localFieldNames().length || !constraintName().trim()"
+            [disabled]="editorBusy() || !canEditRelationships(sourceSnapshot()) || !selectedFieldSetOption()?.compatible || !localFieldNames().length || !constraintName().trim()"
             (click)="saveRelationship()">
             @if (editorBusy()) { Checking… } @else { Save to Runbook }
           </button>

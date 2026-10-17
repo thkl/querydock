@@ -243,7 +243,7 @@ export class WorkspaceSidebarComponent {
               schema,
               resourceName: resource.name,
               resourceKind: resource.kind,
-              canBrowseData: connection.capabilities.browseData,
+              canBrowseData: resource.canBrowseData ?? connection.capabilities.browseData,
             });
           }
         }

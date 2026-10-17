@@ -8,6 +8,7 @@ export interface DiagramPoint {
 
 export interface RelationshipDiagramViewState {
   snapshots: TableSnapshot[] | null;
+  schemaRevision: number;
   partialLoadCount: number;
   tablePositions: Record<string, DiagramPoint>;
   scrollLeft: number;
@@ -26,6 +27,7 @@ export class RelationshipDiagramStateService {
       tablePositions: Object.fromEntries(Object.entries(view.tablePositions).map(([key, point]) => [key, { ...point }])),
     } : {
       snapshots: null,
+      schemaRevision: 0,
       partialLoadCount: 0,
       tablePositions: {},
       scrollLeft: 0,
@@ -34,10 +36,11 @@ export class RelationshipDiagramStateService {
   }
 
   /** Caches loaded table snapshots and whether loading was limited to a partial result. */
-  saveSnapshots(connectionId: string, snapshots: TableSnapshot[], partialLoadCount: number): void {
+  saveSnapshots(connectionId: string, snapshots: TableSnapshot[], partialLoadCount: number, schemaRevision = 0): void {
     this.update(connectionId, (current) => ({
       ...current,
       snapshots: [...snapshots],
+      schemaRevision,
       partialLoadCount,
     }));
   }
