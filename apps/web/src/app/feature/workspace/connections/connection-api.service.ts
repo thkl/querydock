@@ -16,6 +16,7 @@ import type {
   TableDataQueryResponse,
   TableDataRowUpdate,
   TableDataRowInsert,
+  TableDataRowDelete,
   DataRunbookPreviewRequest,
   DataRunbookPreviewResponse,
 } from '@querydock/contracts';
@@ -176,6 +177,20 @@ export class ConnectionApiService {
     return request<void>(`/api/connections/${path}`, {
       method: 'POST',
       body: JSON.stringify(update),
+    });
+  }
+
+  /** Deletes one table row using its primary key and last-read version token. */
+  deleteTableDataRow(
+    connectionId: string,
+    schema: string,
+    table: string,
+    deletion: TableDataRowDelete,
+  ): Promise<void> {
+    const path = [connectionId, 'tables', schema, table, 'data', 'delete-row'].map(encodeURIComponent).join('/');
+    return request<void>(`/api/connections/${path}`, {
+      method: 'POST',
+      body: JSON.stringify(deletion),
     });
   }
 

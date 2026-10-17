@@ -22,6 +22,7 @@ import type {
   TableDataQueryResponse,
   TableDataRowUpdate,
   TableDataRowInsert,
+  TableDataRowDelete,
   DataRunbookPreviewResponse,
 } from '@querydock/contracts';
 
@@ -246,32 +247,34 @@ export class PostgresAdapter {
         const keyFields = snapshot.constraints.find(({ kind }) => kind === 'primaryKey')?.fieldNames ?? [];
         const isBaseTable = snapshot.kind === 'table' || snapshot.kind === 'partitionedTable';
         const privileges = isBaseTable
-          ? await client.query<{ name: string; canUpdate: boolean; canInsert: boolean; tableInsert: boolean }>(`
+          ? await client.query<{ name: string; canUpdate: boolean; canInsert: boolean; tableInsert: boolean; tableDelete: boolean }>(`
               SELECT attribute.attname AS name,
                 has_column_privilege(current_user, relation.oid, attribute.attnum, 'UPDATE') AS "canUpdate",
                 has_column_privilege(current_user, relation.oid, attribute.attnum, 'INSERT') AS "canInsert",
-                has_table_privilege(current_user, relation.oid, 'INSERT') AS "tableInsert"
+                has_table_privilege(current_user, relation.oid, 'INSERT') AS "tableInsert",
+                has_table_privilege(current_user, relation.oid, 'DELETE') AS "tableDelete"
               FROM pg_catalog.pg_class relation
               JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace
               JOIN pg_catalog.pg_attribute attribute ON attribute.attrelid = relation.oid
               WHERE namespace.nspname = $1 AND relation.relname = $2
                 AND attribute.attnum > 0 AND NOT attribute.attisdropped
             `, [schema, table])
-          : { rows: [] as { name: string; canUpdate: boolean; canInsert: boolean; tableInsert: boolean }[] };
+          : { rows: [] as { name: string; canUpdate: boolean; canInsert: boolean; tableInsert: boolean; tableDelete: boolean }[] };
         const updatableFields = new Set(privileges.rows.filter(({ canUpdate }) => canUpdate).map(({ name }) => name));
         const insertableFields = new Set(privileges.rows.filter(({ canInsert }) => canInsert).map(({ name }) => name));
         const canUpdateRows = isBaseTable && keyFields.length > 0
           && snapshot.fields.some(({ name, generated, identityGeneration }) => updatableFields.has(name)
             && !generated && !identityGeneration && !keyFields.includes(name));
         const canInsertRows = isBaseTable && (privileges.rows[0]?.tableInsert === true || insertableFields.size > 0);
-        const versionSelect = canUpdateRows ? `, xmin::text AS ${quoteIdentifier(rowVersionAlias)}` : '';
+        const canDeleteRows = isBaseTable && keyFields.length > 0 && privileges.rows[0]?.tableDelete === true;
+        const versionSelect = canUpdateRows || canDeleteRows ? `, xmin::text AS ${quoteIdentifier(rowVersionAlias)}` : '';
         const result = await client.query<Record<string, string | null>>(
           `SELECT ${select}${versionSelect} FROM ${quoteIdentifier(schema)}.${quoteIdentifier(table)}${where} ORDER BY ${order} LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
           pageValues,
         );
         await client.query('COMMIT');
-        const rowVersions = canUpdateRows ? result.rows.map((row) => String(row[rowVersionAlias] ?? '')) : [];
-        const rows = canUpdateRows
+        const rowVersions = canUpdateRows || canDeleteRows ? result.rows.map((row) => String(row[rowVersionAlias] ?? '')) : [];
+        const rows = canUpdateRows || canDeleteRows
           ? result.rows.map(({ [rowVersionAlias]: _version, ...row }) => row)
           : result.rows;
         return {
@@ -289,6 +292,7 @@ export class PostgresAdapter {
           rowVersions,
           canUpdateRows,
           canInsertRows,
+          canDeleteRows,
           totalRows,
         };
       } catch (error) {
@@ -325,12 +329,39 @@ export class PostgresAdapter {
     });
   }
 
+  /** Deletes one primary-key row using its opaque version token as a concurrency guard. */
+  async deleteTableDataRow(
+    configuration: PostgresConnectRequest,
+    schema: string,
+    table: string,
+    deletion: TableDataRowDelete,
+  ): Promise<void> {
+    validatePostgresIdentifier(schema, 'schema');
+    validatePostgresIdentifier(table, 'table');
+    return this.withClient(configuration, async (client) => {
+      await client.query('BEGIN');
+      try {
+        const snapshot = await this.inspectTableWithClient(client, schema, table);
+        if (!snapshot) throw new MigrationPlanError('not-found', 'The requested table was not found or is not visible.');
+        const statement = deleteDataRowStatement(snapshot, deletion);
+        const result = await client.query(statement);
+        if (result.rowCount !== 1) {
+          throw new MigrationPlanError('drift', 'This row changed or was already removed in the database. Refresh the table before deleting it.');
+        }
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK').catch(() => undefined);
+        throw error;
+      }
+    });
+  }
+
   /** Builds reviewed SQL for staged data operations against a fresh server-side table snapshot. */
   async previewDataRunbook(
     configuration: PostgresConnectRequest,
     schema: string,
     table: string,
-    operations: Extract<SchemaOperation, { kind: 'updateDataRow' | 'insertDataRow' }>[],
+    operations: Extract<SchemaOperation, { kind: 'updateDataRow' | 'insertDataRow' | 'deleteDataRow' }>[],
   ): Promise<DataRunbookPreviewResponse> {
     validatePostgresIdentifier(schema, 'schema');
     validatePostgresIdentifier(table, 'table');
@@ -598,7 +629,7 @@ export class PostgresAdapter {
         }
         validateTableLifecycleOperations(request.operations);
         const dataOnly = request.operations.every((operation) =>
-          operation.kind === 'updateDataRow' || operation.kind === 'insertDataRow');
+          operation.kind === 'updateDataRow' || operation.kind === 'insertDataRow' || operation.kind === 'deleteDataRow');
         await client.query(`LOCK TABLE ${quoteIdentifier(request.schema)}.${quoteIdentifier(request.table)} IN ${dataOnly ? 'ROW EXCLUSIVE' : 'ACCESS EXCLUSIVE'} MODE`);
         const snapshot = await this.inspectTableWithClient(client, request.schema, request.table);
         if (!snapshot) throw new MigrationPlanError('not-found', 'The requested table was not found or is not visible.');
@@ -619,7 +650,7 @@ export class PostgresAdapter {
 
         for (const statement of statements) {
           const result = await client.query(statement);
-          if ((statement.startsWith('UPDATE ') || statement.startsWith('INSERT ')) && result.rowCount !== 1) {
+          if ((statement.startsWith('UPDATE ') || statement.startsWith('INSERT ') || statement.startsWith('DELETE ')) && result.rowCount !== 1) {
             throw new MigrationPlanError('drift', 'A staged row operation affected an unexpected number of rows. The transaction was rolled back; refresh the table and stage the operation again.');
           }
         }
@@ -1269,7 +1300,7 @@ export function createMigrationPreview(snapshot: TableSnapshot, request: Migrati
     if (operation.kind === 'createTable') {
       throw new MigrationPlanError('invalid', 'Create-table operations require a new-table baseline.');
     }
-    if (operation.kind === 'updateDataRow' || operation.kind === 'insertDataRow') continue;
+    if (operation.kind === 'updateDataRow' || operation.kind === 'insertDataRow' || operation.kind === 'deleteDataRow') continue;
     if (operation.kind === 'addNullableField') {
       validateFieldName(operation.name);
       if (operation.identityGeneration && !identityGenerationSupported(operation.type)) {
@@ -1384,18 +1415,19 @@ export function createMigrationPreview(snapshot: TableSnapshot, request: Migrati
     const kindSql = operation.constraintKind === 'primaryKey' ? 'PRIMARY KEY' : 'UNIQUE';
     return [`ALTER TABLE ${table} ADD CONSTRAINT ${quoteIdentifier(operation.name)} ${kindSql} (${fields});`];
   });
-  const dataStatements = request.operations
-    .filter((operation): operation is Extract<SchemaOperation, { kind: 'updateDataRow' }> => operation.kind === 'updateDataRow')
-    .map((operation) => updateDataRowStatement(snapshot, operation));
-  const rowInserts = request.operations
-    .filter((operation): operation is Extract<SchemaOperation, { kind: 'insertDataRow' }> => operation.kind === 'insertDataRow')
-    .map((operation) => insertDataRowStatement(snapshot, operation));
-  return [...schemaStatements, ...dataStatements, ...rowInserts];
+  const dataStatements = request.operations.flatMap((operation) => {
+    if (operation.kind === 'updateDataRow') return [updateDataRowStatement(snapshot, operation)];
+    if (operation.kind === 'insertDataRow') return [insertDataRowStatement(snapshot, operation)];
+    if (operation.kind === 'deleteDataRow') return [deleteDataRowStatement(snapshot, operation)];
+    return [];
+  });
+  return [...schemaStatements, ...dataStatements];
 }
 
 /** Keeps row writes isolated from schema changes while allowing several completed rows per batch. */
 function validateDataRowOperationBatch(operations: SchemaOperation[]): void {
-  const dataOperations = operations.filter((operation) => operation.kind === 'updateDataRow' || operation.kind === 'insertDataRow');
+  const dataOperations = operations.filter((operation) => operation.kind === 'updateDataRow'
+    || operation.kind === 'insertDataRow' || operation.kind === 'deleteDataRow');
   if (dataOperations.length && dataOperations.length !== operations.length) {
     throw new MigrationPlanError('invalid', 'Stage data row edits separately from schema changes.');
   }
@@ -1700,6 +1732,30 @@ function updateDataRowStatement(snapshot: TableSnapshot, update: TableDataRowUpd
   const keyPredicates = primaryKey.map((name) => `${quoteIdentifier(name)} IS NOT DISTINCT FROM ${sqlLiteral(update.key[name])}`);
   const predicates = [...keyPredicates, `xmin::text = ${sqlLiteral(update.expectedVersion)}`];
   return `UPDATE ${quoteIdentifier(snapshot.schema)}.${quoteIdentifier(snapshot.name)} SET ${assignments.join(', ')} WHERE ${predicates.join(' AND ')};`;
+}
+
+/** Generates a guarded DELETE statement for a row with a complete primary-key identity. */
+function deleteDataRowStatement(snapshot: TableSnapshot, deletion: TableDataRowDelete): string {
+  if (snapshot.kind !== 'table' && snapshot.kind !== 'partitionedTable') {
+    throw new MigrationPlanError('invalid', 'Rows can only be deleted from a base table.');
+  }
+  const primaryKey = snapshot.constraints.find(({ kind }) => kind === 'primaryKey')?.fieldNames ?? [];
+  if (!primaryKey.length || primaryKey.length !== Object.keys(deletion.key).length
+    || primaryKey.some((name) => !Object.hasOwn(deletion.key, name))) {
+    throw new MigrationPlanError('invalid', 'This row delete must include every primary-key field for the selected table.');
+  }
+  if (!/^\d+$/.test(deletion.expectedVersion)) {
+    throw new MigrationPlanError('invalid', 'The row version is invalid. Refresh the table and retry the delete.');
+  }
+  const fieldNames = new Set(snapshot.fields.map(({ name }) => name));
+  for (const [name, value] of Object.entries(deletion.key)) {
+    if (!fieldNames.has(name) || value === null) {
+      throw new MigrationPlanError('invalid', 'The row identity does not match this table primary key. Refresh the table and retry.');
+    }
+  }
+  const predicates = primaryKey.map((name) => `${quoteIdentifier(name)} IS NOT DISTINCT FROM ${sqlLiteral(deletion.key[name])}`);
+  predicates.push(`xmin::text = ${sqlLiteral(deletion.expectedVersion)}`);
+  return `DELETE FROM ${quoteIdentifier(snapshot.schema)}.${quoteIdentifier(snapshot.name)} WHERE ${predicates.join(' AND ')};`;
 }
 
 /** Emits a quoted SQL literal for preview/runbook text without accepting SQL expressions. */

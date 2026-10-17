@@ -25,6 +25,7 @@ import {
   tableDataQueryRequestSchema,
   tableDataRowUpdateSchema,
   tableDataRowInsertSchema,
+  tableDataRowDeleteSchema,
   dataRunbookPreviewRequestSchema,
   type ConnectResponse,
 } from '@querydock/contracts';
@@ -175,6 +176,28 @@ export class ConnectionsController {
     const configuration = this.sessions.requireConnection(request, response, connectionId);
     try {
       await this.postgres.updateTableDataRow(configuration, schema, table, parsed.data);
+    } catch (error) {
+      if (error instanceof MigrationPlanError) throw this.asMigrationException(error);
+      throw this.asSafeDatabaseException(error);
+    }
+  }
+
+  /** Deletes one existing row through the active database adapter. */
+  @Post(':connectionId/tables/:schema/:table/data/delete-row')
+  @HttpCode(204)
+  async deleteTableDataRow(
+    @Param('connectionId') connectionId: string,
+    @Param('schema') schema: string,
+    @Param('table') table: string,
+    @Body() body: unknown,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ): Promise<void> {
+    const parsed = tableDataRowDeleteSchema.safeParse(body);
+    if (!parsed.success) throw new BadRequestException('Invalid table row delete. Refresh the row and submit its current primary key and version.');
+    const configuration = this.sessions.requireConnection(request, response, connectionId);
+    try {
+      await this.postgres.deleteTableDataRow(configuration, schema, table, parsed.data);
     } catch (error) {
       if (error instanceof MigrationPlanError) throw this.asMigrationException(error);
       throw this.asSafeDatabaseException(error);

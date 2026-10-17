@@ -11,6 +11,7 @@ import type {
   TableSnapshot,
   TableDataRowUpdate,
   TableDataRowInsert,
+  TableDataRowDelete,
 } from '@querydock/contracts';
 import { ApiRequestError, ConnectionApiService } from '../connections/connection-api.service';
 
@@ -66,6 +67,32 @@ export class RunbookService {
   readonly pendingStatementCount = computed(() => this.runbook()?.preview?.statements.length ?? 0);
   readonly appliedStatements = computed(() => this.runbook()?.appliedBatches.flatMap(({ statements }) => statements) ?? []);
   readonly ready = this.restore();
+
+  /** Returns row-key identities marked for deletion while staged deletes await Apply. */
+  pendingDeletedRowIdentities(connection: ConnectResponse, schema: string, table: string): ReadonlySet<string> {
+    const current = this.runbookForTarget(connection.target);
+    if (!current || !sameRunbookResource(current, connection.target, schema, table)) return new Set();
+    return new Set(current.operations.flatMap((operation) => operation.kind === 'deleteDataRow'
+      ? [rowKeyIdentity(operation.key)] : []));
+  }
+
+  /** Returns staged inserts for restoring their draft rows when the data page is reopened. */
+  pendingDataRowInserts(connection: ConnectResponse, schema: string, table: string): TableDataRowInsert[] {
+    const current = this.runbookForTarget(connection.target);
+    if (!current || !sameRunbookResource(current, connection.target, schema, table)) return [];
+    return current.operations.flatMap((operation) => operation.kind === 'insertDataRow'
+      ? [{ draftId: operation.draftId, values: operation.values }]
+      : []);
+  }
+
+  /** Returns staged row updates so the data grid can restore their draft values after navigation. */
+  pendingDataRowUpdates(connection: ConnectResponse, schema: string, table: string): TableDataRowUpdate[] {
+    const current = this.runbookForTarget(connection.target);
+    if (!current || !sameRunbookResource(current, connection.target, schema, table)) return [];
+    return current.operations.flatMap((operation) => operation.kind === 'updateDataRow'
+      ? [{ key: operation.key, expectedVersion: operation.expectedVersion, changes: operation.changes }]
+      : []);
+  }
 
   /** Replaces or removes a staged field operation using a fresh server preview. */
   async stageSchemaFieldDraft(
@@ -356,13 +383,15 @@ export class RunbookService {
     if (current?.operations.length && !matches) {
       throw new Error('This database runbook has pending changes for another table. Apply or clear those changes before staging a row edit.');
     }
-    if (current?.operations.some((operation) => operation.kind !== 'updateDataRow' && operation.kind !== 'insertDataRow')) {
+    if (current?.operations.some((operation) => operation.kind !== 'updateDataRow'
+      && operation.kind !== 'insertDataRow' && operation.kind !== 'deleteDataRow')) {
       throw new Error('Apply or discard the pending schema changes before staging data row edits.');
     }
 
-    const identity = JSON.stringify(Object.entries(update.key).sort(([a], [b]) => a.localeCompare(b)));
-    const retained = ((current?.operations ?? []).filter((operation) => operation.kind !== 'updateDataRow'
-      || JSON.stringify(Object.entries(operation.key).sort(([a], [b]) => a.localeCompare(b))) !== identity)) as DataRunbookPreviewRequest['operations'];
+    const identity = rowKeyIdentity(update.key);
+    const retained = ((current?.operations ?? []).filter((operation) =>
+      (operation.kind !== 'updateDataRow' && operation.kind !== 'deleteDataRow')
+      || rowKeyIdentity(operation.key) !== identity)) as DataRunbookPreviewRequest['operations'];
     const operations = [...retained, { kind: 'updateDataRow' as const, ...update }];
     this.previewing.set(true);
     try {
@@ -406,12 +435,97 @@ export class RunbookService {
     if (current?.operations.length && !matches) {
       throw new Error('This database runbook has pending changes for another table. Apply or clear those changes before staging a row.');
     }
-    if (current?.operations.some((operation) => operation.kind !== 'updateDataRow' && operation.kind !== 'insertDataRow')) {
+    if (current?.operations.some((operation) => operation.kind !== 'updateDataRow'
+      && operation.kind !== 'insertDataRow' && operation.kind !== 'deleteDataRow')) {
       throw new Error('Apply or discard the pending schema changes before staging data rows.');
     }
     const retained = ((current?.operations ?? []).filter((operation) =>
       operation.kind !== 'insertDataRow' || operation.draftId !== insert.draftId)) as DataRunbookPreviewRequest['operations'];
     const operations = [...retained, { kind: 'insertDataRow' as const, ...insert }];
+    this.previewing.set(true);
+    try {
+      const generated = await this.connections.previewDataRunbook(connection.connectionId, schema, table, operations);
+      if (matches && current?.baseline && current.baseline.fingerprint !== generated.snapshot.fingerprint) {
+        throw new Error('The table structure changed since this Runbook was started. Refresh the table and review the pending operations again.');
+      }
+      const baseline = matches ? current?.baseline ?? generated.snapshot : generated.snapshot;
+      const runbook: SchemaRunbook = {
+        target: connection.target,
+        schema: baseline.schema,
+        table: baseline.name,
+        baseline,
+        operations,
+        preview: generated.preview,
+        appliedBatches: current?.appliedBatches ?? [],
+        applyOutcomeUnknown: false,
+      };
+      this.setRunbookForTarget(connection.target, runbook);
+      await this.persist(runbook);
+    } catch (error) {
+      this.error.set(messageOf(error));
+      throw error;
+    } finally {
+      this.previewing.set(false);
+    }
+  }
+
+  /** Removes a staged insert when its draft row is deleted from the grid before Apply. */
+  async discardDataRowInsert(
+    connection: ConnectResponse,
+    schema: string,
+    table: string,
+    draftId: string,
+  ): Promise<void> {
+    await this.ready;
+    const current = this.runbookForTarget(connection.target);
+    if (!current || !sameRunbookResource(current, connection.target, schema, table)) return;
+    if (current.operations.some((operation) => operation.kind !== 'updateDataRow'
+      && operation.kind !== 'insertDataRow' && operation.kind !== 'deleteDataRow')) {
+      throw new Error('Apply or discard the pending schema changes before removing a staged data row.');
+    }
+    const operations = current.operations.filter((operation) =>
+      operation.kind !== 'insertDataRow' || operation.draftId !== draftId) as DataRunbookPreviewRequest['operations'];
+    if (operations.length === current.operations.length) return;
+    this.previewing.set(true);
+    try {
+      const preview = operations.length
+        ? (await this.connections.previewDataRunbook(connection.connectionId, schema, table, operations)).preview
+        : null;
+      const updated = { ...current, operations, preview, applyOutcomeUnknown: false };
+      this.setRunbookForTarget(connection.target, updated);
+      await this.persist(updated);
+    } catch (error) {
+      this.error.set(messageOf(error));
+      throw error;
+    } finally {
+      this.previewing.set(false);
+    }
+  }
+
+  /** Stages a guarded row deletion as server-generated SQL in the current data Runbook. */
+  async stageDataRowDelete(
+    connection: ConnectResponse,
+    schema: string,
+    table: string,
+    deletion: TableDataRowDelete,
+  ): Promise<void> {
+    await this.ready;
+    this.error.set(null);
+    const current = this.runbookForTarget(connection.target);
+    const matches = current && sameRunbookResource(current, connection.target, schema, table);
+    if (current?.applyOutcomeUnknown) throw new Error('The previous Apply outcome is unknown. Inspect the database before staging or applying more changes.');
+    if (current?.operations.length && !matches) {
+      throw new Error('This database runbook has pending changes for another table. Apply or clear those changes before staging a row delete.');
+    }
+    if (current?.operations.some((operation) => operation.kind !== 'updateDataRow'
+      && operation.kind !== 'insertDataRow' && operation.kind !== 'deleteDataRow')) {
+      throw new Error('Apply or discard the pending schema changes before staging data row deletes.');
+    }
+    const identity = rowKeyIdentity(deletion.key);
+    const retained = ((current?.operations ?? []).filter((operation) =>
+      (operation.kind !== 'updateDataRow' && operation.kind !== 'deleteDataRow')
+      || rowKeyIdentity(operation.key) !== identity)) as DataRunbookPreviewRequest['operations'];
+    const operations = [...retained, { kind: 'deleteDataRow' as const, ...deletion }];
     this.previewing.set(true);
     try {
       const generated = await this.connections.previewDataRunbook(connection.connectionId, schema, table, operations);
@@ -843,6 +957,11 @@ function runbookKey(target: ConnectionTarget): string {
     target.database,
     target.username,
   ]))}`;
+}
+
+/** Creates a stable identity for a composite primary key independent of object property order. */
+function rowKeyIdentity(key: Record<string, string | null>): string {
+  return JSON.stringify(Object.entries(key).sort(([a], [b]) => a.localeCompare(b)));
 }
 
 /** Compares target identity while deliberately excluding the password. */

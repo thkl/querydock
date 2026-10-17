@@ -12,12 +12,12 @@
       <div>
         <p class="eyebrow">TABLE DATA <span class="separator">/</span> {{ routeState()[1].get('schema') ?? 'public' }}</p>
         <h1>{{ routeState()[0].get('tableName') }}</h1>
-        <p class="page-description">Browse and edit rows in {{ connections.activeConnection()?.target.database }} · completed row edits save directly.</p>
+        <p class="page-description">Browse and manage rows in {{ connections.activeConnection()?.target.database }} · edits and deletes save directly unless you stage them in the Runbook.</p>
       </div>
       <button class="subtle-button" type="button" (click)="refresh()">Refresh rows</button>
     </header>
     <div class="data-toolbar">
-      @if (canUpdateRows() || canInsertRows()) {
+      @if (canUpdateRows() || canInsertRows() || canDeleteRows()) {
         <div class="runbook-option">
           <label class="runbook-toggle">
             <input
@@ -30,7 +30,7 @@
           <span class="runbook-note">Changes become permanent when you apply the Runbook.</span>
         </div>
       } @else {
-        <span class="read-only-notice">This database account can browse but cannot edit or add rows.</span>
+        <span class="read-only-notice">This database account can browse rows but has no row changes enabled.</span>
       }
       @if (canInsertRows() && !canUpdateRows()) {
         <span class="read-only-notice">This role can add rows, but existing rows are read-only.</span>
@@ -39,13 +39,19 @@
       }
       <p class="row-count" aria-live="polite">{{ totalRows() }} {{ totalRows() === 1 ? 'row' : 'rows' }}</p>
     </div>
+    @if (pendingDeleteCount() + pendingInsertCount() + pendingUpdateCount() > 0) {
+      <p class="pending-delete-notice" role="status">
+        {{ pendingInsertCount() }} {{ pendingInsertCount() === 1 ? 'insert' : 'inserts' }}, {{ pendingUpdateCount() }} {{ pendingUpdateCount() === 1 ? 'update' : 'updates' }}, and {{ pendingDeleteCount() }} {{ pendingDeleteCount() === 1 ? 'deletion' : 'deletions' }} staged. Draft inserts and updated values stay visible; deletions are marked in the grid. Changes reach the database when you apply the Runbook.
+        <button type="button" (click)="openRunbook()">Review Runbook</button>
+      </p>
+    }
     @if (error()) {
       <p class="data-error" role="alert">{{ error() }}</p>
     } @else if (!loaded()) {
       <p class="data-status" role="status">Loading table rows…</p>
     }
-    <section class="data-grid" aria-label="Table rows">
-      <agrid [provider]="provider()" (prepareAddRecord)="prepareAddRow($event)" (rowChanged)="saveRow($event)" />
+    <section class="data-grid" [class.data-grid--delete-disabled]="!canDeleteRows()" aria-label="Table rows">
+      <agrid [provider]="provider()" (prepareAddRecord)="prepareAddRow($event)" (rowChanged)="saveRow($event)" (rowRemoved)="deleteRow($event)" />
     </section>
     <p class="data-footnote">Values are displayed as text to preserve database precision. Edits save after you finish a row. Tables without a primary key remain read-only. Browsed rows are never stored in browser storage.</p>
   }

@@ -1,8 +1,8 @@
-import { ChangeDetectionStrategy, Component, effect, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, signal, viewChild } from '@angular/core';
 import { ActivatedRoute, Router } from '@angular/router';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { combineLatest } from 'rxjs';
-import type { TableDataQueryRequest, TableDataQueryResponse } from '@querydock/contracts';
+import type { TableDataQueryRequest, TableDataQueryResponse, TableDataRowDelete } from '@querydock/contracts';
 import {
   AgridComponent,
   AgridControl,
@@ -13,6 +13,7 @@ import {
   type ColumnFilter,
   type NewRecord,
   type RowUpdateEvent,
+  type RowRemovedEvent,
 } from '@thkl/agrid';
 import { ConnectionApiService } from '../connections/connection-api.service';
 import { WorkspaceHomeComponent } from '../workspace-home/workspace-home.component';
@@ -32,6 +33,7 @@ const PAGE_SIZE = 50;
   styleUrl: './table-data.component.css',
 })
 export class TableDataComponent {
+  private readonly dataGrid = viewChild<AgridComponent<TableDataRow>>(AgridComponent);
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
   private readonly workspacePages = inject(WorkspacePagesService);
@@ -47,6 +49,36 @@ export class TableDataComponent {
   readonly saveChangesToRunbook = signal(false);
   readonly canUpdateRows = signal(false);
   readonly canInsertRows = signal(false);
+  readonly canDeleteRows = signal(false);
+  readonly pendingDeleteKeys = computed(() => {
+    const [params, query] = this.routeState();
+    const connection = this.connections.activeConnection();
+    const table = params.get('tableName');
+    return connection && table
+      ? this.runbook.pendingDeletedRowIdentities(connection, query.get('schema') ?? 'public', table)
+      : new Set<string>();
+  });
+  readonly pendingDeleteCount = computed(() => {
+    return this.pendingDeleteKeys().size;
+  });
+  readonly pendingInsertCount = computed(() => {
+    const [params, query] = this.routeState();
+    const connection = this.connections.activeConnection();
+    const table = params.get('tableName');
+    return connection && table
+      ? this.runbook.pendingDataRowInserts(connection, query.get('schema') ?? 'public', table).length
+      : 0;
+  });
+  readonly pendingUpdateKeys = computed(() => {
+    const [params, query] = this.routeState();
+    const connection = this.connections.activeConnection();
+    const table = params.get('tableName');
+    return connection && table
+      ? new Set(this.runbook.pendingDataRowUpdates(connection, query.get('schema') ?? 'public', table)
+        .map(({ key }) => rowIdentity(Object.keys(key), key)))
+      : new Set<string>();
+  });
+  readonly pendingUpdateCount = computed(() => this.pendingUpdateKeys().size);
   private id = signal<string | null>(null);
   private requestVersion = 0;
   private lastGridCriteria = '';
@@ -54,7 +86,7 @@ export class TableDataComponent {
   private keyFields: string[] = [];
   private rowVersions: string[] = [];
   private originalRows: TableDataRow[] = [];
-  private newRows = new Map<number, { draftId: string; baseline: TableDataRow }>();
+  private newRows = new Map<number, { draftId: string; baseline: TableDataRow; stagedValues?: Record<string, string | null> }>();
   readonly gridControl = new AgridControl({ allowRowReorder: false, pageSize: PAGE_SIZE });
   private gridState = this.createGridState();
   readonly provider = signal(this.gridState.provider);
@@ -78,6 +110,7 @@ export class TableDataComponent {
       this.originalRows = [];
       this.canUpdateRows.set(false);
       this.canInsertRows.set(false);
+      this.canDeleteRows.set(false);
       this.newRows.clear();
       this.saveChangesToRunbook.set(connection && table
         ? this.workspacePages.saveDataChangesToRunbook(connection.connectionId, schema, table)
@@ -126,6 +159,11 @@ export class TableDataComponent {
     }
   }
 
+  /** Opens the Runbook so staged data changes can be reviewed or discarded. */
+  openRunbook(): void {
+    void this.router.navigateByUrl('/runbook');
+  }
+
   /** Creates a row-editable grid; provider events still save only after a row is completed. */
   private createGridState(): {
     datasource: AgridDataSource<TableDataRow>;
@@ -152,6 +190,20 @@ export class TableDataComponent {
       showSidebar: true,
       hideGridStatusBar: false,
       allowAddRows,
+      confirmRowDelete: true,
+      getRowClass: ({ row, index }) => {
+        if (this.newRows.has(index)) return 'row-pending-insert';
+        const identity = rowIdentity(this.keyFields, row);
+        if (this.pendingDeleteKeys().has(identity)) return 'row-pending-delete';
+        return this.pendingUpdateKeys().has(identity) ? 'row-pending-update' : '';
+      },
+      getCellMenuItems: () => this.canDeleteRows() && this.gridControl.readonly()
+        ? [{
+          label: 'Delete row',
+          danger: true,
+          action: ({ originalIndex }) => this.dataGrid()?.deleteRow(originalIndex),
+        }]
+        : [],
       showChangedCellIndicator: true,
       zebraStripes: true,
       rowSelection: 'single',
@@ -186,25 +238,46 @@ export class TableDataComponent {
       quickFilter: request.quickFilter,
     };
     try {
+      await this.runbook.ready;
       const result = await this.connections.queryTableData(connection.connectionId, schema, table, queryRequest);
       if (version !== this.requestVersion) return;
       this.totalRows.set(result.totalRows);
-      this.gridState.datasource.setData(result.rows);
       this.keyFields = result.keyFields;
-      this.rowVersions = result.rowVersions;
+      this.rowVersions = [...result.rowVersions];
       this.originalRows = result.rows.map((row) => ({ ...row }));
       this.newRows.clear();
+      const stagedUpdates = this.runbook.pendingDataRowUpdates(connection, schema, table);
+      const updatesByIdentity = new Map(stagedUpdates.map((update) => [rowIdentity(result.keyFields, update.key), update.changes]));
+      const displayedRows = result.rows.map((row) => ({
+        ...row,
+        ...(updatesByIdentity.get(rowIdentity(result.keyFields, row)) ?? {}),
+      }));
+      const stagedInserts = this.runbook.pendingDataRowInserts(connection, schema, table);
+      const restoredDrafts = stagedInserts.map(({ draftId, values }) => {
+        const baseline = Object.fromEntries(result.columns.map(({ name }) => [name, null])) as TableDataRow;
+        return { row: { ...baseline, ...values }, draftId, baseline, stagedValues: values };
+      });
+      restoredDrafts.forEach((draft, index) => this.newRows.set(result.rows.length + index, {
+        draftId: draft.draftId,
+        baseline: draft.baseline,
+        stagedValues: draft.stagedValues,
+      }));
+      this.gridState.datasource.setData([...displayedRows, ...restoredDrafts.map(({ row }) => row)]);
       this.canUpdateRows.set(result.canUpdateRows);
       this.canInsertRows.set(result.canInsertRows);
-      this.gridControl.setTotalRows(result.totalRows);
+      this.canDeleteRows.set(result.canDeleteRows);
+      this.gridControl.setTotalRows(this.totalRows());
       const columns: ColDef<TableDataRow>[] = result.columns.map((column) => ({
         field: column.name,
         header: column.name,
         type: 'text',
         editable: column.editable || column.insertable,
-        cellReadonly: ({ originalIndex }) => this.newRows.has(originalIndex)
-          ? !column.insertable || !this.canInsertRows()
-          : !column.editable || !this.canUpdateRows(),
+        cellReadonly: ({ originalIndex }) => {
+          if (this.newRows.has(originalIndex)) return !column.insertable || !this.canInsertRows();
+          const row = this.originalRows[originalIndex];
+          return !column.editable || !this.canUpdateRows()
+            || Boolean(row && this.pendingDeleteKeys().has(rowIdentity(this.keyFields, row)));
+        },
         width: column.name.length > 18 ? 190 : 150,
       }));
       if (!sameColumns(this.currentColumns, result.columns)) {
@@ -260,12 +333,14 @@ export class TableDataComponent {
     }
     const key = Object.fromEntries(this.keyFields.map((field) => [field, baseline[field]]));
     const update = { key, expectedVersion, changes };
+    const hasStagedUpdate = this.pendingUpdateKeys().has(rowIdentity(this.keyFields, baseline));
     this.error.set(null);
     try {
-      if (this.saveChangesToRunbook()) {
+      if (this.saveChangesToRunbook() || hasStagedUpdate) {
         await this.runbook.stageDataRowUpdate(connection, schema, table, update);
         this.gridControl.clearChangedCells(event.originalIndex);
         this.error.set(null);
+        this.refresh();
         return;
       }
       await this.connections.updateTableDataRow(connection.connectionId, schema, table, update);
@@ -278,17 +353,79 @@ export class TableDataComponent {
     }
   }
 
+  /** Deletes a persisted row directly or stages server-generated DELETE SQL in the Runbook. */
+  async deleteRow(event: RowRemovedEvent<TableDataRow>): Promise<void> {
+    const draft = this.newRows.get(event.index);
+    this.shiftDraftRowsAfterDelete(event.index);
+    const [params, query] = this.routeState();
+    const connection = this.connections.activeConnection();
+    const table = params.get('tableName');
+    const schema = query.get('schema') ?? 'public';
+    if (draft) {
+      if (connection && table && draft.stagedValues) {
+        try {
+          await this.runbook.discardDataRowInsert(connection, schema, table, draft.draftId);
+          this.refresh();
+        } catch (error) {
+          this.error.set(error instanceof Error ? error.message : 'Unable to remove this staged insert from the Runbook.');
+          this.refresh();
+        }
+      }
+      return;
+    }
+    const baseline = this.originalRows[event.index];
+    const expectedVersion = this.rowVersions[event.index];
+    if (!connection || !table || !this.canDeleteRows() || !baseline || !expectedVersion || !this.keyFields.length) {
+      this.refresh();
+      this.error.set('This row cannot be deleted with the current database permissions. Refresh the table and try again.');
+      return;
+    }
+    const deletion: TableDataRowDelete = {
+      key: Object.fromEntries(this.keyFields.map((field) => [field, event.data[field] ?? baseline[field]])),
+      expectedVersion,
+    };
+    this.error.set(null);
+    try {
+      if (this.saveChangesToRunbook()) {
+        await this.runbook.stageDataRowDelete(connection, schema, table, deletion);
+        this.refresh();
+        return;
+      }
+      this.originalRows.splice(event.index, 1);
+      this.rowVersions.splice(event.index, 1);
+      this.totalRows.update((count) => Math.max(0, count - 1));
+      await this.connections.deleteTableDataRow(connection.connectionId, schema, table, deletion);
+      this.refresh();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to delete this row. Refresh the table and try again.';
+      const gridProvider = this.provider();
+      const gridQuery = gridProvider.serverQuery();
+      if (gridQuery) await this.loadRows(gridQuery, gridProvider);
+      this.error.set(message);
+    }
+  }
+
+  /** Keeps indices for unfinished blank insert rows aligned when aGrid removes a row. */
+  private shiftDraftRowsAfterDelete(index: number): void {
+    const shifted = new Map<number, { draftId: string; baseline: TableDataRow; stagedValues?: Record<string, string | null> }>();
+    for (const [draftIndex, draft] of this.newRows) {
+      if (draftIndex < index) shifted.set(draftIndex, draft);
+      else if (draftIndex > index) shifted.set(draftIndex - 1, draft);
+    }
+    this.newRows = shifted;
+  }
+
   /** Saves or stages a completed new row, omitting untouched blank cells so database defaults apply. */
   private async saveNewRow(
     event: RowUpdateEvent<TableDataRow>,
-    draft: { draftId: string; baseline: TableDataRow },
+    draft: { draftId: string; baseline: TableDataRow; stagedValues?: Record<string, string | null> },
   ): Promise<void> {
     const [params, query] = this.routeState();
     const connection = this.connections.activeConnection();
     const table = params.get('tableName');
     const schema = query.get('schema') ?? 'public';
     if (!connection || !table || !this.canInsertRows()) return;
-    const values: Record<string, string | null> = {};
+    const values: Record<string, string | null> = { ...(draft.stagedValues ?? {}) };
     for (const column of this.currentColumns) {
       if (column.insertable && event.row[column.name] !== draft.baseline[column.name]) {
         values[column.name] = event.row[column.name];
@@ -301,8 +438,9 @@ export class TableDataComponent {
     const insert = { draftId: draft.draftId, values };
     this.error.set(null);
     try {
-      if (this.saveChangesToRunbook()) {
+      if (this.saveChangesToRunbook() || draft.stagedValues) {
         await this.runbook.stageDataRowInsert(connection, schema, table, insert);
+        this.newRows.set(event.originalIndex, { ...draft, stagedValues: values });
         this.gridControl.clearChangedCells(event.originalIndex);
         return;
       }
@@ -356,4 +494,10 @@ function sameColumns(
     column.name === right[index]?.name && column.dataType === right[index]?.dataType
     && column.editable === right[index]?.editable
     && column.insertable === right[index]?.insertable);
+}
+
+/** Produces the same stable key representation used by staged Runbook row deletes. */
+function rowIdentity(fields: string[], row: TableDataRow): string {
+  const entries: [string, string | null][] = fields.map((field) => [field, row[field] ?? null]);
+  return JSON.stringify(entries.sort(([left], [right]) => left.localeCompare(right)));
 }

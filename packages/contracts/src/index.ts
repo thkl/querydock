@@ -169,6 +169,7 @@ export const tableDataQueryResponseSchema = z.object({
   rowVersions: z.array(z.string()),
   canUpdateRows: z.boolean(),
   canInsertRows: z.boolean(),
+  canDeleteRows: z.boolean(),
   totalRows: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
 });
 export type TableDataQueryResponse = z.infer<typeof tableDataQueryResponseSchema>;
@@ -179,6 +180,9 @@ export const tableDataRowUpdateSchema = z.object({
   changes: z.record(z.string(), z.string().nullable()).refine((value) => Object.keys(value).length > 0),
 });
 export type TableDataRowUpdate = z.infer<typeof tableDataRowUpdateSchema>;
+
+export const tableDataRowDeleteSchema = tableDataRowUpdateSchema.pick({ key: true, expectedVersion: true });
+export type TableDataRowDelete = z.infer<typeof tableDataRowDeleteSchema>;
 
 export const tableDataRowInsertSchema = z.object({
   draftId: z.uuid(),
@@ -292,12 +296,17 @@ export const insertDataRowOperationSchema = tableDataRowInsertSchema.extend({
   kind: z.literal('insertDataRow'),
 });
 
+export const deleteDataRowOperationSchema = tableDataRowDeleteSchema.extend({
+  kind: z.literal('deleteDataRow'),
+});
+
 export const schemaOperationSchema = z.discriminatedUnion('kind', [
   createTableOperationSchema,
   renameTableOperationSchema,
   dropTableOperationSchema,
   updateDataRowOperationSchema,
   insertDataRowOperationSchema,
+  deleteDataRowOperationSchema,
   addNullableFieldOperationSchema,
   alterFieldOperationSchema,
   addConstraintOperationSchema,
@@ -324,7 +333,7 @@ export const migrationPreviewResponseSchema = z.object({
 export type MigrationPreviewResponse = z.infer<typeof migrationPreviewResponseSchema>;
 
 export const dataRunbookPreviewRequestSchema = z.object({
-  operations: z.array(z.union([updateDataRowOperationSchema, insertDataRowOperationSchema])).min(1).max(50),
+  operations: z.array(z.union([updateDataRowOperationSchema, insertDataRowOperationSchema, deleteDataRowOperationSchema])).min(1).max(50),
 });
 export type DataRunbookPreviewRequest = z.infer<typeof dataRunbookPreviewRequestSchema>;
 

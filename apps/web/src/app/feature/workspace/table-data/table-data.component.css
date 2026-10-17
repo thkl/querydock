@@ -64,6 +64,39 @@
   font-size: .9em;
 }
 
+.pending-delete-notice {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  color: var(--color-warning, var(--color-accent));
+  font-size: .9em;
+}
+
+.pending-delete-notice button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-accent);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+:host ::ng-deep .data-grid .ag-row.row-pending-delete {
+  background: color-mix(in srgb, var(--color-danger) 12%, transparent);
+  opacity: .62;
+}
+
+:host ::ng-deep .data-grid .ag-row.row-pending-insert {
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
+
+:host ::ng-deep .data-grid .ag-row.row-pending-update {
+  background: color-mix(in srgb, var(--color-warning, var(--color-accent)) 10%, transparent);
+}
+
 .row-count {
   margin: 0;
   color: var(--color-muted);
@@ -115,6 +148,10 @@ h1 {
   width: 100%;
   min-width: 0;
   min-height: 0;
+}
+
+:host ::ng-deep .data-grid--delete-disabled .ag-context-menu .ag-context-item--danger {
+  display: none;
 }
 
 .ag-state-overlay {
