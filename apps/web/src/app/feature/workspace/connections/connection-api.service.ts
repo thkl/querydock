@@ -19,8 +19,9 @@ import type {
   TableDataRowDelete,
   DataRunbookPreviewRequest,
   DataRunbookPreviewResponse,
+  DatabasePermissionReport,
 } from '@querydock/contracts';
-import { dataRunbookPreviewResponseSchema, tableDataQueryResponseSchema } from '@querydock/contracts';
+import { dataRunbookPreviewResponseSchema, databasePermissionReportSchema, tableDataQueryResponseSchema } from '@querydock/contracts';
 
 export class ApiRequestError extends Error {
   /** Retains the HTTP status while exposing the server's safe user-facing message. */
@@ -149,6 +150,15 @@ export class ConnectionApiService {
     } finally {
       this.disconnectingId.set(null);
     }
+  }
+
+  /** Loads effective database, schema, and object permissions for one active connection. */
+  permissions(connectionId: string): Promise<DatabasePermissionReport> {
+    return request<unknown>(`/api/connections/${encodeURIComponent(connectionId)}/permissions`).then((payload) => {
+      const parsed = databasePermissionReportSchema.safeParse(payload);
+      if (!parsed.success) throw new Error('The server returned an invalid database permission report.');
+      return parsed.data;
+    });
   }
 
   /** Loads one table's schema snapshot for the active workspace feature. */

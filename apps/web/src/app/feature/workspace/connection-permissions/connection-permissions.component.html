@@ -1,0 +1,87 @@
+<section class="permissions-page">
+  <header class="page-header">
+    <div>
+      <p class="eyebrow">DATABASE ACCESS · {{ report()?.database ?? connections.activeConnection()?.target.database ?? '—' }}</p>
+      <h1>Permissions</h1>
+      <p class="page-description">Effective permissions reported by the database for the connected user.</p>
+    </div>
+    <button class="refresh-button" type="button" [disabled]="loading() || !connections.activeConnectionId()" (click)="refresh()">
+      @if (loading()) { Refreshing… } @else { Refresh }
+    </button>
+  </header>
+
+  @if (error() && !report()) {
+    <div class="state-message error" role="alert">{{ error() }}</div>
+    @if (!connections.activeConnectionId()) { <a class="home-link" routerLink="/">Go to connections</a> }
+  } @else if (loading() && !report()) {
+    <div class="state-message" role="status">Loading effective permissions…</div>
+  } @else if (report(); as currentReport) {
+    @if (error()) { <div class="state-message warning" role="status">Refresh failed: {{ error() }} Showing the last report.</div> }
+
+    <section class="identity-card" aria-label="Database identity">
+      <div><span>Database</span><strong>{{ currentReport.database }}</strong></div>
+      <div><span>Database user</span><strong>{{ currentReport.currentUser }}</strong></div>
+      <div><span>Server login</span><strong>{{ currentReport.serverUser ?? 'Not reported' }}</strong></div>
+      <div><span>Adapter</span><strong>{{ currentReport.adapter === 'sqlserver' ? 'Microsoft SQL Server' : 'PostgreSQL' }}</strong></div>
+    </section>
+
+    <section class="database-privileges" aria-labelledby="database-privileges-title">
+      <h2 id="database-privileges-title">Database privileges</h2>
+      <div class="privilege-list">
+        @for (privilege of currentReport.databasePrivileges; track privilege.name) {
+          <span class="privilege-chip" [class.granted]="privilege.granted" [class.denied]="!privilege.granted">
+            <span aria-hidden="true">{{ privilege.granted ? '✓' : '—' }}</span>{{ privilege.name }}
+          </span>
+        }
+      </div>
+    </section>
+
+    <div class="report-note" role="note">
+      These are effective privileges reported for this connection, including role memberships and inherited grants. SQL Server only reports objects visible through the current login's metadata permissions. Schema editing may also depend on adapter support.
+    </div>
+
+    @if (!currentReport.schemas.length) {
+      <div class="state-message">No non-system schemas are visible to this user.</div>
+    } @else {
+      <section class="schema-list" aria-label="Schema and object permissions">
+        @for (schema of currentReport.schemas; track schema.name) {
+          <article class="schema-card">
+            <header class="schema-header">
+              <div><p class="eyebrow">SCHEMA</p><h2>{{ schema.name }}</h2></div>
+              <div class="privilege-list">
+                @for (privilege of schema.privileges; track privilege.name) {
+                  <span class="privilege-chip compact" [class.granted]="privilege.granted" [class.denied]="!privilege.granted">
+                    <span aria-hidden="true">{{ privilege.granted ? '✓' : '—' }}</span>{{ privilege.name }}
+                  </span>
+                }
+              </div>
+            </header>
+            @if (schema.objects.length) {
+              <div class="object-table-scroll">
+                <table>
+                  <thead><tr>
+                    <th scope="col">Object</th>
+                    @for (privilege of schema.objects[0]!.privileges; track privilege.name) { <th scope="col">{{ privilege.name }}</th> }
+                  </tr></thead>
+                  <tbody>
+                    @for (object of schema.objects; track object.kind + ':' + object.name) {
+                      <tr>
+                        <th scope="row"><span class="object-kind">{{ object.kind }}</span>{{ object.name }}</th>
+                        @for (privilege of object.privileges; track privilege.name) {
+                          <td><span class="grant-indicator" [class.granted]="privilege.granted" [class.denied]="!privilege.granted"
+                            [attr.aria-label]="privilege.granted ? privilege.name + ' granted' : privilege.name + ' not granted'">{{ privilege.granted ? '✓' : '—' }}</span></td>
+                        }
+                      </tr>
+                    }
+                  </tbody>
+                </table>
+              </div>
+            } @else {
+              <p class="empty-schema">No visible tables or views in this schema.</p>
+            }
+          </article>
+        }
+      </section>
+    }
+  }
+</section>

@@ -87,6 +87,23 @@ export class ConnectionsController {
     return this.sessions.listConnections(request, response);
   }
 
+  /** Reports effective database privileges for the active role without exposing stored credentials. */
+  @Get(':connectionId/permissions')
+  async inspectPermissions(
+    @Param('connectionId') connectionId: string,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const configuration = this.sessions.requireConnection(request, response, connectionId);
+    try {
+      return configuration.adapter === 'postgresql'
+        ? await this.postgres.inspectPermissions(configuration)
+        : await this.sqlserver.inspectPermissions(configuration);
+    } catch (error) {
+      throw this.asSafeDatabaseException(error);
+    }
+  }
+
   /** Lists visible tables and views through the configured database adapter. */
   @Get(':connectionId/resources')
   async listResources(

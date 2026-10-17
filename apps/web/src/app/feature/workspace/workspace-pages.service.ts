@@ -40,6 +40,14 @@ export interface RelationshipDiagramPage {
   route: string;
 }
 
+export interface ConnectionPermissionsPage {
+  id: string;
+  connectionId: string;
+  label: string;
+  title: string;
+  route: string;
+}
+
 export interface CreateTableDraftField {
   id: number;
   name: string;
@@ -64,6 +72,7 @@ export class WorkspacePagesService {
   readonly dataPages = signal<TableDataPage[]>([]);
   readonly createTablePages = signal<CreateTablePage[]>([]);
   readonly relationshipPages = signal<RelationshipDiagramPage[]>([]);
+  readonly permissionPages = signal<ConnectionPermissionsPage[]>([]);
   readonly createTableDrafts = signal<ReadonlyMap<string, CreateTableDraft>>(new Map());
   private readonly dataRunbookPreferences = signal<ReadonlyMap<string, boolean>>(new Map());
   private readonly currentRoute = signal(this.router.url);
@@ -87,6 +96,11 @@ export class WorkspacePagesService {
     const route = this.currentRoute();
     const connectionId = this.connections.activeConnectionId();
     return this.relationshipPages().find((page) => page.connectionId === connectionId && page.route === route) ?? null;
+  });
+  readonly activePermissionPage = computed(() => {
+    const route = this.currentRoute();
+    const connectionId = this.connections.activeConnectionId();
+    return this.permissionPages().find((page) => page.connectionId === connectionId && page.route === route) ?? null;
   });
 
   /** Tracks router navigation so active tabs follow the current URL. */
@@ -177,7 +191,11 @@ export class WorkspacePagesService {
         else {
           const nextRelationshipPage = this.relationshipPages().at(-1);
           if (nextRelationshipPage) this.selectRelationshipPage(nextRelationshipPage);
-          else void this.router.navigateByUrl('/');
+          else {
+            const nextPermissionPage = this.permissionPages().at(-1);
+            if (nextPermissionPage) this.selectPermissionPage(nextPermissionPage);
+            else void this.router.navigateByUrl('/');
+          }
         }
       }
     }
@@ -247,7 +265,75 @@ export class WorkspacePagesService {
     else {
       const nextCreatePage = this.createTablePages().at(-1);
       if (nextCreatePage) this.selectCreateTablePage(nextCreatePage);
-      else void this.router.navigateByUrl('/');
+      else {
+        const nextPermissionPage = this.permissionPages().at(-1);
+        if (nextPermissionPage) this.selectPermissionPage(nextPermissionPage);
+        else void this.router.navigateByUrl('/');
+      }
+    }
+  }
+
+  /** Opens the connection-scoped effective permissions report. */
+  openPermissionReport(connectionId: string): void {
+    const page = this.registerOpenedPermissionReport(connectionId);
+    this.selectPermissionPage(page);
+  }
+
+  /** Registers the permissions tab on route activation, including a browser reload. */
+  preparePermissionReport(connectionId: string): void {
+    this.registerOpenedPermissionReport(connectionId);
+    this.connections.selectConnection(connectionId);
+  }
+
+  /** Creates or returns the one permissions report tab for a connection. */
+  registerOpenedPermissionReport(connectionId: string): ConnectionPermissionsPage {
+    let page = this.permissionPages().find((candidate) => candidate.connectionId === connectionId);
+    if (!page) {
+      const database = this.connections.connections()
+        .find((connection) => connection.connectionId === connectionId)?.target.database;
+      page = {
+        id: JSON.stringify(['permissions', connectionId]),
+        connectionId,
+        label: database ? `Permissions · ${database}` : 'Permissions',
+        title: `${database ? `${database} · ` : ''}Database permissions`,
+        route: '/permissions',
+      };
+      this.permissionPages.update((pages) => [...pages, page!]);
+    }
+    return page;
+  }
+
+  /** Activates a permissions tab and its owning database connection. */
+  selectPermissionPage(page: ConnectionPermissionsPage): void {
+    this.connections.selectConnection(page.connectionId);
+    void this.router.navigateByUrl(page.route);
+  }
+
+  /** Closes a permissions tab and selects another open workspace page. */
+  closePermissionPage(page: ConnectionPermissionsPage): void {
+    const wasActive = this.activePermissionPage()?.id === page.id;
+    const remaining = this.permissionPages().filter((candidate) => candidate.id !== page.id);
+    this.permissionPages.set(remaining);
+    if (!wasActive) return;
+    const nextPermissionPage = remaining.at(-1);
+    if (nextPermissionPage) {
+      this.selectPermissionPage(nextPermissionPage);
+      return;
+    }
+    const nextRelationshipPage = this.relationshipPages().at(-1);
+    if (nextRelationshipPage) this.selectRelationshipPage(nextRelationshipPage);
+    else {
+      const nextDataPage = this.dataPages().at(-1);
+      if (nextDataPage) this.selectDataPage(nextDataPage);
+      else {
+        const nextTablePage = this.pages().at(-1);
+        if (nextTablePage) this.selectPage(nextTablePage);
+        else {
+          const nextCreatePage = this.createTablePages().at(-1);
+          if (nextCreatePage) this.selectCreateTablePage(nextCreatePage);
+          else void this.router.navigateByUrl('/');
+        }
+      }
     }
   }
 
@@ -320,6 +406,11 @@ export class WorkspacePagesService {
     const nextRelationshipPage = this.relationshipPages().at(-1);
     if (nextRelationshipPage) {
       this.selectRelationshipPage(nextRelationshipPage);
+      return;
+    }
+    const nextPermissionPage = this.permissionPages().at(-1);
+    if (nextPermissionPage) {
+      this.selectPermissionPage(nextPermissionPage);
       return;
     }
     const nextTablePage = this.pages().at(-1);
@@ -396,7 +487,11 @@ export class WorkspacePagesService {
         else {
           const nextRelationshipPage = this.relationshipPages().at(-1);
           if (nextRelationshipPage) this.selectRelationshipPage(nextRelationshipPage);
-          else void this.router.navigateByUrl('/');
+          else {
+            const nextPermissionPage = this.permissionPages().at(-1);
+            if (nextPermissionPage) this.selectPermissionPage(nextPermissionPage);
+            else void this.router.navigateByUrl('/');
+          }
         }
       }
     }
@@ -437,6 +532,7 @@ export class WorkspacePagesService {
       || this.dataPages().some((page) => page.connectionId === connectionId && page.route === currentRoute)
       || this.createTablePages().some((page) => page.connectionId === connectionId && page.route === currentRoute)
       || this.relationshipPages().some((page) => page.connectionId === connectionId && page.route === currentRoute);
+    const closesCurrentPermissionPage = this.permissionPages().some((page) => page.connectionId === connectionId && page.route === currentRoute);
     const removedDataPageIds = new Set(this.dataPages().filter((page) => page.connectionId === connectionId).map(({ id }) => id));
     this.pages.update((pages) => pages.filter((page) => page.connectionId !== connectionId));
     this.dataPages.update((pages) => pages.filter((page) => page.connectionId !== connectionId));
@@ -455,7 +551,8 @@ export class WorkspacePagesService {
       for (const id of removedIds) next.delete(id);
       return next;
     });
-    if (!closesCurrentRoute) return;
+    this.permissionPages.update((pages) => pages.filter((page) => page.connectionId !== connectionId));
+    if (!closesCurrentRoute && !closesCurrentPermissionPage) return;
 
     const nextPage = this.pages().at(-1);
     if (nextPage) {
@@ -475,6 +572,11 @@ export class WorkspacePagesService {
     const nextRelationshipPage = this.relationshipPages().at(-1);
     if (nextRelationshipPage) {
       this.selectRelationshipPage(nextRelationshipPage);
+      return;
+    }
+    const nextPermissionPage = this.permissionPages().at(-1);
+    if (nextPermissionPage) {
+      this.selectPermissionPage(nextPermissionPage);
       return;
     }
     void this.router.navigateByUrl('/');

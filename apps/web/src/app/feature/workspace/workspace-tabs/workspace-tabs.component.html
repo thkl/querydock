@@ -40,6 +40,16 @@
           (click)="closeRelationshipPage($event, page)">×</button>
       </div>
     }
+    @for (page of pages.permissionPages(); track page.id) {
+      <div #pageTab class="page-tab" [class.current]="pages.activePermissionPage()?.id === page.id" [attr.data-page-id]="page.id">
+        <a class="work-tab page-tab-link" [class.current]="pages.activePermissionPage()?.id === page.id"
+          [routerLink]="page.route" [title]="page.title" (click)="pages.selectPermissionPage(page)">
+          <span class="tab-grid-icon" aria-hidden="true">⌑</span><span>{{ page.label }}</span>
+        </a>
+        <button class="tab-close" type="button" [attr.aria-label]="'Close ' + page.title" title="Close tab"
+          (click)="closePermissionPage($event, page)">×</button>
+      </div>
+    }
     <a class="work-tab runbook-tab" routerLink="/runbook" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }">
       <span class="tab-runbook-icon" aria-hidden="true">▤</span><span>Runbook</span>
       @if (runbook.pendingOperationCount()) { <span class="tab-dot" aria-label="Pending changes"></span> }

@@ -3,6 +3,7 @@ import { Logger } from '@nestjs/common';
 import sql from 'mssql';
 import type {
   DataRunbookPreviewResponse,
+  DatabasePermissionReport,
   MigrationApplyRequest,
   MigrationApplyResponse,
   MigrationPreviewRequest,
@@ -72,6 +73,108 @@ export class SqlServerAdapter {
         "SELECT CONVERT(nvarchar(256), SERVERPROPERTY('ProductVersion')) AS serverVersion",
       );
       return { serverVersion: result.recordset[0]?.serverVersion ?? 'unknown' };
+    });
+  }
+
+  /** Reports effective SQL Server database, schema, and object permissions for the active principal. */
+  async inspectPermissions(configuration: SqlServerConnectRequest): Promise<DatabasePermissionReport> {
+    return this.withPool(configuration, async (pool) => {
+      const identityResult = await pool.request().query<{
+        database: string; currentUser: string; serverUser: string | null;
+      }>(`
+        SELECT DB_NAME() AS [database], USER_NAME() AS currentUser, SUSER_SNAME() AS serverUser;
+      `);
+      const identity = identityResult.recordset[0];
+      if (!identity) throw new MigrationPlanError('unknown', 'SQL Server did not return the active database identity.');
+
+      const databaseResult = await pool.request().query<{
+        canConnect: boolean; canCreateTable: boolean; canCreateView: boolean;
+        canCreateSchema: boolean; canAlterAnySchema: boolean; canViewDefinition: boolean; canControl: boolean;
+      }>(`
+        SELECT CONVERT(bit, COALESCE(HAS_DBACCESS(DB_NAME()), 0)) AS canConnect,
+          CONVERT(bit, COALESCE(HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'CREATE TABLE'), 0)) AS canCreateTable,
+          CONVERT(bit, COALESCE(HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'CREATE VIEW'), 0)) AS canCreateView,
+          CONVERT(bit, COALESCE(HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'CREATE SCHEMA'), 0)) AS canCreateSchema,
+          CONVERT(bit, COALESCE(HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'ALTER ANY SCHEMA'), 0)) AS canAlterAnySchema,
+          CONVERT(bit, COALESCE(HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'VIEW DEFINITION'), 0)) AS canViewDefinition,
+          CONVERT(bit, COALESCE(HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'CONTROL'), 0)) AS canControl;
+      `);
+      const schemaResult = await pool.request().query<{
+        schema: string; canSelect: boolean; canInsert: boolean; canUpdate: boolean;
+        canDelete: boolean; canExecute: boolean; canAlter: boolean; canControl: boolean;
+      }>(`
+        SELECT name AS [schema],
+          CONVERT(bit, COALESCE(HAS_PERMS_BY_NAME(QUOTENAME(name), 'SCHEMA', 'SELECT'), 0)) AS canSelect,
+          CONVERT(bit, COALESCE(HAS_PERMS_BY_NAME(QUOTENAME(name), 'SCHEMA', 'INSERT'), 0)) AS canInsert,
+          CONVERT(bit, COALESCE(HAS_PERMS_BY_NAME(QUOTENAME(name), 'SCHEMA', 'UPDATE'), 0)) AS canUpdate,
+          CONVERT(bit, COALESCE(HAS_PERMS_BY_NAME(QUOTENAME(name), 'SCHEMA', 'DELETE'), 0)) AS canDelete,
+          CONVERT(bit, COALESCE(HAS_PERMS_BY_NAME(QUOTENAME(name), 'SCHEMA', 'EXECUTE'), 0)) AS canExecute,
+          CONVERT(bit, COALESCE(HAS_PERMS_BY_NAME(QUOTENAME(name), 'SCHEMA', 'ALTER'), 0)) AS canAlter,
+          CONVERT(bit, COALESCE(HAS_PERMS_BY_NAME(QUOTENAME(name), 'SCHEMA', 'CONTROL'), 0)) AS canControl
+        FROM sys.schemas
+        WHERE name NOT IN ('sys', 'INFORMATION_SCHEMA')
+        ORDER BY name;
+      `);
+      const objectResult = await pool.request().query<{
+        schema: string; name: string; kind: 'table' | 'view';
+        canSelect: boolean; canInsert: boolean; canUpdate: boolean; canDelete: boolean;
+        canAlter: boolean; canViewDefinition: boolean; canControl: boolean;
+      }>(`
+        SELECT s.name AS [schema], o.name,
+          CASE WHEN o.type = 'V' THEN 'view' ELSE 'table' END AS kind,
+          CONVERT(bit, COALESCE(HAS_PERMS_BY_NAME(QUOTENAME(s.name) + N'.' + QUOTENAME(o.name), 'OBJECT', 'SELECT'), 0)) AS canSelect,
+          CONVERT(bit, COALESCE(HAS_PERMS_BY_NAME(QUOTENAME(s.name) + N'.' + QUOTENAME(o.name), 'OBJECT', 'INSERT'), 0)) AS canInsert,
+          CONVERT(bit, COALESCE(HAS_PERMS_BY_NAME(QUOTENAME(s.name) + N'.' + QUOTENAME(o.name), 'OBJECT', 'UPDATE'), 0)) AS canUpdate,
+          CONVERT(bit, COALESCE(HAS_PERMS_BY_NAME(QUOTENAME(s.name) + N'.' + QUOTENAME(o.name), 'OBJECT', 'DELETE'), 0)) AS canDelete,
+          CONVERT(bit, COALESCE(HAS_PERMS_BY_NAME(QUOTENAME(s.name) + N'.' + QUOTENAME(o.name), 'OBJECT', 'ALTER'), 0)) AS canAlter,
+          CONVERT(bit, COALESCE(HAS_PERMS_BY_NAME(QUOTENAME(s.name) + N'.' + QUOTENAME(o.name), 'OBJECT', 'VIEW DEFINITION'), 0)) AS canViewDefinition,
+          CONVERT(bit, COALESCE(HAS_PERMS_BY_NAME(QUOTENAME(s.name) + N'.' + QUOTENAME(o.name), 'OBJECT', 'CONTROL'), 0)) AS canControl
+        FROM sys.objects o
+        JOIN sys.schemas s ON s.schema_id = o.schema_id
+        WHERE o.type IN ('U', 'V') AND o.is_ms_shipped = 0
+        ORDER BY s.name, o.name;
+      `);
+      const database = databaseResult.recordset[0];
+      return {
+        adapter: 'sqlserver',
+        database: identity.database,
+        currentUser: identity.currentUser,
+        serverUser: identity.serverUser,
+        databasePrivileges: [
+          { name: 'CONNECT', granted: Boolean(database?.canConnect) },
+          { name: 'CREATE TABLE', granted: Boolean(database?.canCreateTable) },
+          { name: 'CREATE VIEW', granted: Boolean(database?.canCreateView) },
+          { name: 'CREATE SCHEMA', granted: Boolean(database?.canCreateSchema) },
+          { name: 'ALTER ANY SCHEMA', granted: Boolean(database?.canAlterAnySchema) },
+          { name: 'VIEW DEFINITION', granted: Boolean(database?.canViewDefinition) },
+          { name: 'CONTROL', granted: Boolean(database?.canControl) },
+        ],
+        schemas: schemaResult.recordset.map((schema) => ({
+          name: schema.schema,
+          privileges: [
+            { name: 'SELECT', granted: schema.canSelect },
+            { name: 'INSERT', granted: schema.canInsert },
+            { name: 'UPDATE', granted: schema.canUpdate },
+            { name: 'DELETE', granted: schema.canDelete },
+            { name: 'EXECUTE', granted: schema.canExecute },
+            { name: 'ALTER', granted: schema.canAlter },
+            { name: 'CONTROL', granted: schema.canControl },
+          ],
+          objects: objectResult.recordset.filter((object) => object.schema === schema.schema).map((object) => ({
+            name: object.name,
+            kind: object.kind,
+            privileges: [
+              { name: 'SELECT', granted: object.canSelect },
+              { name: 'INSERT', granted: object.canInsert },
+              { name: 'UPDATE', granted: object.canUpdate },
+              { name: 'DELETE', granted: object.canDelete },
+              { name: 'ALTER', granted: object.canAlter },
+              { name: 'VIEW DEFINITION', granted: object.canViewDefinition },
+              { name: 'CONTROL', granted: object.canControl },
+            ],
+          })),
+        })),
+      };
     });
   }
 

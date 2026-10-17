@@ -1,0 +1,44 @@
+:host { display: block; min-width: 0; min-height: 0; height: 100%; }
+.permissions-page { display: flex; min-width: 0; min-height: 0; height: 100%; flex-direction: column; gap: 16px; overflow: auto; padding: 18px 22px 28px; }
+.page-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.eyebrow { margin: 0 0 6px; color: var(--color-accent); font-size: .75em; font-weight: 750; letter-spacing: .12em; }
+h1, h2, p { margin-top: 0; }
+h1 { margin-bottom: 5px; color: var(--color-foreground); font-size: 1.5em; }
+.page-description { margin: 0; color: var(--color-muted); font-size: .92em; }
+.refresh-button { flex: 0 0 auto; min-height: 38px; padding: 0 13px; border: 1px solid var(--color-border-strong); border-radius: 7px; background: var(--color-surface-solid); color: var(--color-foreground); font: inherit; cursor: pointer; }
+.refresh-button:disabled { cursor: wait; opacity: .6; }
+.identity-card { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; padding: 15px; border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-background-raised); }
+.identity-card > div { display: grid; min-width: 0; gap: 5px; }
+.identity-card span { color: var(--color-muted); font-size: .78em; }
+.identity-card strong { overflow-wrap: anywhere; color: var(--color-foreground); font-size: .92em; }
+.database-privileges h2 { margin: 0 0 10px; color: var(--color-foreground); font-size: 1.05em; }
+.privilege-list { display: flex; flex-wrap: wrap; gap: 7px; }
+.privilege-chip { display: inline-flex; align-items: center; gap: 6px; padding: 6px 9px; border: 1px solid var(--color-border); border-radius: 999px; background: var(--color-surface); color: var(--color-muted); font-size: .8em; white-space: nowrap; }
+.privilege-chip.granted, .grant-indicator.granted { border-color: color-mix(in srgb, var(--color-accent) 35%, transparent); color: var(--color-accent); }
+.privilege-chip.denied, .grant-indicator.denied { color: var(--color-muted); }
+.report-note, .state-message { padding: 11px 13px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-surface); color: var(--color-muted); font-size: .86em; line-height: 1.5; }
+.state-message.error { border-color: color-mix(in srgb, var(--color-danger) 40%, transparent); color: var(--color-danger); }
+.state-message.warning { border-color: color-mix(in srgb, var(--color-warning) 40%, transparent); color: var(--color-warning); }
+.home-link { color: var(--color-accent); }
+.schema-list { display: grid; gap: 12px; }
+.schema-card { min-width: 0; overflow: hidden; border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-background-raised); }
+.schema-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 15px; border-bottom: 1px solid var(--color-border); }
+.schema-header .eyebrow { margin-bottom: 3px; }
+.schema-header h2 { margin: 0; overflow-wrap: anywhere; color: var(--color-foreground); font-size: 1.02em; }
+.privilege-chip.compact { padding: 4px 7px; font-size: .75em; }
+.object-table-scroll { max-width: 100%; overflow: auto; }
+table { width: 100%; border-collapse: collapse; font-size: .82em; white-space: nowrap; }
+th, td { padding: 9px 10px; border-bottom: 1px solid var(--color-border); text-align: center; }
+thead th { position: sticky; top: 0; z-index: 1; background: var(--color-surface-solid); color: var(--color-muted); font-size: .9em; font-weight: 650; }
+tbody tr:last-child th, tbody tr:last-child td { border-bottom: 0; }
+tbody th { min-width: 180px; color: var(--color-foreground); font-weight: 550; text-align: left; }
+.object-kind { display: inline-block; min-width: 46px; margin-right: 8px; color: var(--color-muted); font-size: .82em; text-transform: uppercase; }
+.grant-indicator { display: inline-grid; width: 22px; height: 22px; place-items: center; border: 1px solid var(--color-border); border-radius: 50%; color: var(--color-muted); }
+.empty-schema { margin: 0; padding: 14px 15px; color: var(--color-muted); font-size: .85em; }
+.permissions-page button:focus-visible, .permissions-page a:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+
+@media (max-width: 760px) {
+  .permissions-page { padding: 14px 12px 22px; }
+  .identity-card { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .schema-header { align-items: flex-start; flex-direction: column; }
+}

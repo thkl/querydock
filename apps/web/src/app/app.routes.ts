@@ -23,6 +23,13 @@ export const routes: Routes = [
           ),
       },
       {
+        path: 'permissions',
+        loadComponent: () =>
+          import('./feature/workspace/connection-permissions/connection-permissions.component').then(
+            (component) => component.ConnectionPermissionsComponent,
+          ),
+      },
+      {
         path: 'tables/:tableName/data',
         loadComponent: () =>
           import('./feature/workspace/table-data/table-data.component').then(

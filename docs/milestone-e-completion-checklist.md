@@ -20,6 +20,7 @@ Use this checklist to sign off cross-database relationship workflows and data br
 - [ ] **Data browsing (D-0–D-2):** Bounded paging, stable sort, search and clearing search, filter reset, table switching, small-screen scrolling, and route restoration work without clipped controls or stale results.
 - [ ] **Data changes (D-3 onward):** Multi-cell row edits save once per completed row; add/delete work; success clears changed-cell state; failures remain visible and retryable. Verify PK/keyless cases, stale-row conflicts, NULL/default/large-value behavior, read-only account behavior, and direct-save versus staged Runbook behavior.
 - [ ] **SQL Server (S-1–S-5):** Table/view separation, view definition permissions, bounded data operations, concurrency, Runbook SQL, read-only enforcement, and explicit unsupported schema-edit handling pass on a SQL Server instance.
+- [ ] **Permission inspector (P-1):** Active database identity and effective database, schema, and object permissions match each engine's permission checks for read/write and read-only accounts; inaccessible metadata is clearly explained.
 - [ ] **Privacy (D-9):** No credentials or fetched rows are persisted in Runbook/browser state; only explicitly staged SQL and necessary target metadata remain after reload.
 
 ## Sign-off

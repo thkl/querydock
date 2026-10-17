@@ -5,6 +5,7 @@ import { MigrationPlanError } from '../database/database-errors.js';
 export { MigrationPlanError } from '../database/database-errors.js';
 import type {
   CreateTableField,
+  DatabasePermissionReport,
   MigrationApplyRequest,
   MigrationApplyResponse,
   MigrationPreviewRequest,
@@ -146,6 +147,95 @@ export class PostgresAdapter {
         'SELECT current_setting(\'server_version\') AS "serverVersion"',
       );
       return { serverVersion: result.rows[0]?.serverVersion ?? 'unknown' };
+    });
+  }
+
+  /** Reports effective PostgreSQL database, schema, and object privileges for the connected role. */
+  async inspectPermissions(configuration: PostgresConnectRequest): Promise<DatabasePermissionReport> {
+    return this.withClient(configuration, async (client) => {
+      const identity = await client.query<{ database: string; currentUser: string; serverUser: string }>(`
+        SELECT current_database() AS database, current_user AS "currentUser", session_user AS "serverUser"
+      `);
+      const database = identity.rows[0];
+      if (!database) throw new MigrationPlanError('unknown', 'PostgreSQL did not return the active database identity.');
+
+      const databaseResult = await client.query<{ canConnect: boolean; canCreateSchema: boolean; canCreateTemp: boolean }>(`
+        SELECT has_database_privilege(current_user, current_database(), 'CONNECT') AS "canConnect",
+          has_database_privilege(current_user, current_database(), 'CREATE') AS "canCreateSchema",
+          has_database_privilege(current_user, current_database(), 'TEMPORARY') AS "canCreateTemp"
+      `);
+      const schemaResult = await client.query<{
+        schema: string; canUse: boolean; canCreate: boolean;
+      }>(`
+        SELECT namespace.nspname AS schema,
+          has_schema_privilege(current_user, namespace.oid, 'USAGE') AS "canUse",
+          has_schema_privilege(current_user, namespace.oid, 'CREATE') AS "canCreate"
+        FROM pg_catalog.pg_namespace namespace
+        WHERE namespace.nspname <> 'information_schema'
+          AND namespace.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
+        ORDER BY namespace.nspname
+      `);
+      const objectResult = await client.query<{
+        schema: string; name: string; kind: 'table' | 'view';
+        canSelect: boolean; canInsert: boolean; canUpdate: boolean; canDelete: boolean;
+        canTruncate: boolean; canReference: boolean; canTrigger: boolean; canAlter: boolean;
+      }>(`
+        SELECT namespace.nspname AS schema, relation.relname AS name,
+          CASE WHEN relation.relkind IN ('v', 'm') THEN 'view' ELSE 'table' END AS kind,
+          has_table_privilege(current_user, relation.oid, 'SELECT') AS "canSelect",
+          has_table_privilege(current_user, relation.oid, 'INSERT') AS "canInsert",
+          has_table_privilege(current_user, relation.oid, 'UPDATE') AS "canUpdate",
+          has_table_privilege(current_user, relation.oid, 'DELETE') AS "canDelete",
+          has_table_privilege(current_user, relation.oid, 'TRUNCATE') AS "canTruncate",
+          has_table_privilege(current_user, relation.oid, 'REFERENCES') AS "canReference",
+          has_table_privilege(current_user, relation.oid, 'TRIGGER') AS "canTrigger",
+          pg_has_role(current_user, relation.relowner, 'USAGE') AS "canAlter"
+        FROM pg_catalog.pg_class relation
+        JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace
+        WHERE relation.relkind IN ('r', 'p', 'v', 'm', 'f')
+          AND namespace.nspname <> 'information_schema'
+          AND namespace.nspname NOT LIKE 'pg\\_%' ESCAPE '\\'
+        ORDER BY namespace.nspname, relation.relname
+      `);
+      const databasePrivileges = databaseResult.rows[0];
+      const objectsBySchema = new Map<string, typeof objectResult.rows>();
+      for (const object of objectResult.rows) {
+        const objects = objectsBySchema.get(object.schema) ?? [];
+        objects.push(object);
+        objectsBySchema.set(object.schema, objects);
+      }
+      return {
+        adapter: 'postgresql',
+        database: database.database,
+        currentUser: database.currentUser,
+        serverUser: database.serverUser,
+        databasePrivileges: [
+          { name: 'CONNECT', granted: Boolean(databasePrivileges?.canConnect) },
+          { name: 'CREATE SCHEMA', granted: Boolean(databasePrivileges?.canCreateSchema) },
+          { name: 'CREATE TEMP TABLE', granted: Boolean(databasePrivileges?.canCreateTemp) },
+        ],
+        schemas: schemaResult.rows.map((schema) => ({
+          name: schema.schema,
+          privileges: [
+            { name: 'USAGE', granted: schema.canUse },
+            { name: 'CREATE', granted: schema.canCreate },
+          ],
+          objects: (objectsBySchema.get(schema.schema) ?? []).map((object) => ({
+            name: object.name,
+            kind: object.kind,
+            privileges: [
+              { name: 'SELECT', granted: object.canSelect },
+              { name: 'INSERT', granted: object.canInsert },
+              { name: 'UPDATE', granted: object.canUpdate },
+              { name: 'DELETE', granted: object.canDelete },
+              { name: 'TRUNCATE', granted: object.canTruncate },
+              { name: 'REFERENCES', granted: object.canReference },
+              { name: 'TRIGGER', granted: object.canTrigger },
+              { name: 'ALTER / owner', granted: object.canAlter },
+            ],
+          })),
+        })),
+      };
     });
   }
 

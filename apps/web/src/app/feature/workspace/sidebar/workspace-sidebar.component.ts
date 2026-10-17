@@ -7,7 +7,7 @@ import { ConnectionApiService } from '../connections/connection-api.service';
 import { ConnectionVaultService } from '../connections/connection-vault.service';
 import { WorkspacePagesService } from '../workspace-pages.service';
 
-type ExplorerNodeKind = 'connection' | 'schema' | 'category' | 'resource' | 'relationships' | 'empty' | 'error';
+type ExplorerNodeKind = 'connection' | 'schema' | 'category' | 'resource' | 'relationships' | 'permissions' | 'empty' | 'error';
 
 interface ExplorerTreeNode {
   id: string;
@@ -98,6 +98,10 @@ export class WorkspaceSidebarComponent {
         this.pages.openRelationshipDiagram(row.connectionId);
         this.closeMobileTree();
         break;
+      case 'permissions':
+        this.pages.openPermissionReport(row.connectionId);
+        this.closeMobileTree();
+        break;
       case 'schema':
       case 'category':
         this.connections.selectConnection(row.connectionId);
@@ -134,6 +138,10 @@ export class WorkspaceSidebarComponent {
         break;
       case 'open-relationships':
         this.pages.openRelationshipDiagram(row.connectionId);
+        this.closeMobileTree();
+        break;
+      case 'open-permissions':
+        this.pages.openPermissionReport(row.connectionId);
         this.closeMobileTree();
         break;
     }
@@ -269,6 +277,14 @@ export class WorkspaceSidebarComponent {
         kind: 'relationships',
         connectionId,
       });
+      rows.push({
+        id: `permissions:${connectionId}`,
+        parentId: connectionNodeId,
+        label: 'Permissions',
+        description: 'Current database access',
+        kind: 'permissions',
+        connectionId,
+      });
     }
     return rows;
   }
@@ -281,6 +297,7 @@ export class WorkspaceSidebarComponent {
       case 'category': return row.label;
       case 'resource': return `${row.resourceKind === 'view' || row.resourceKind === 'materializedView' ? '◉' : '▦'}  ${row.label}`;
       case 'relationships': return `⌘  ${row.label}`;
+      case 'permissions': return `⌑  ${row.label}`;
       case 'error': return `!  ${row.label}`;
       default: return row.label;
     }
@@ -324,6 +341,8 @@ export class WorkspaceSidebarComponent {
         ];
       case 'relationships':
         return [{ id: 'open-relationships', label: 'Open relationship diagram' }];
+      case 'permissions':
+        return [{ id: 'open-permissions', label: 'View database permissions' }];
       default:
         return [];
     }

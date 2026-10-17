@@ -63,6 +63,30 @@ export const connectResponseSchema = z.object({
 
 export type ConnectResponse = z.infer<typeof connectResponseSchema>;
 
+export const effectivePrivilegeSchema = z.object({
+  name: z.string(),
+  granted: z.boolean(),
+});
+
+export const databasePermissionReportSchema = z.object({
+  adapter: z.enum(['postgresql', 'sqlserver']),
+  database: z.string(),
+  currentUser: z.string(),
+  serverUser: z.string().nullable(),
+  databasePrivileges: z.array(effectivePrivilegeSchema),
+  schemas: z.array(z.object({
+    name: z.string(),
+    privileges: z.array(effectivePrivilegeSchema),
+    objects: z.array(z.object({
+      name: z.string(),
+      kind: z.enum(['table', 'view']),
+      privileges: z.array(effectivePrivilegeSchema),
+    })),
+  })),
+});
+
+export type DatabasePermissionReport = z.infer<typeof databasePermissionReportSchema>;
+
 export const resourceDescriptorSchema = z.object({
   schema: z.string(),
   name: z.string(),
