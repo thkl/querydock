@@ -1,0 +1,6 @@
+<select aria-label="Default preset" [value]="editor.value()" (change)="selectPreset($event)">
+  <option value="">Remove default</option>
+  @for (option of options(); track option.value) {
+    <option [value]="option.value">{{ option.label }}</option>
+  }
+</select>

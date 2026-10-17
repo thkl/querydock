@@ -25,6 +25,7 @@ import {
   tableDataQueryRequestSchema,
   tableDataRowUpdateSchema,
   tableDataRowInsertSchema,
+  dataRunbookPreviewRequestSchema,
   type ConnectResponse,
 } from '@querydock/contracts';
 import { ConnectionSessionsService } from './connection-sessions.service.js';
@@ -174,6 +175,29 @@ export class ConnectionsController {
     const configuration = this.sessions.requireConnection(request, response, connectionId);
     try {
       await this.postgres.updateTableDataRow(configuration, schema, table, parsed.data);
+    } catch (error) {
+      if (error instanceof MigrationPlanError) throw this.asMigrationException(error);
+      throw this.asSafeDatabaseException(error);
+    }
+  }
+
+  /** Generates SQL for staged row operations without changing database data. */
+  @Post(':connectionId/tables/:schema/:table/data/runbook-preview')
+  async previewDataRunbook(
+    @Param('connectionId') connectionId: string,
+    @Param('schema') schema: string,
+    @Param('table') table: string,
+    @Query('dryRun') dryRun: string | undefined,
+    @Body() body: unknown,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    if (dryRun !== 'true') throw new BadRequestException('Set dryRun=true to generate a non-mutating data Runbook preview.');
+    const parsed = dataRunbookPreviewRequestSchema.safeParse(body);
+    if (!parsed.success) throw new BadRequestException('Invalid data Runbook preview. Refresh the table and submit valid row operations.');
+    const configuration = this.sessions.requireConnection(request, response, connectionId);
+    try {
+      return await this.postgres.previewDataRunbook(configuration, schema, table, parsed.data.operations);
     } catch (error) {
       if (error instanceof MigrationPlanError) throw this.asMigrationException(error);
       throw this.asSafeDatabaseException(error);

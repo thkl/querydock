@@ -40,6 +40,19 @@
   cursor: pointer;
 }
 
+.runbook-option {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+}
+
+.runbook-note {
+  color: var(--color-muted);
+  font-size: .82em;
+}
+
 .runbook-toggle input {
   width: 1em;
   height: 1em;
@@ -102,6 +115,10 @@ h1 {
   width: 100%;
   min-width: 0;
   min-height: 0;
+}
+
+.ag-state-overlay {
+  background: none;
 }
 
 .data-error {

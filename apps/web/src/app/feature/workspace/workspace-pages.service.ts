@@ -65,6 +65,7 @@ export class WorkspacePagesService {
   readonly createTablePages = signal<CreateTablePage[]>([]);
   readonly relationshipPages = signal<RelationshipDiagramPage[]>([]);
   readonly createTableDrafts = signal<ReadonlyMap<string, CreateTableDraft>>(new Map());
+  private readonly dataRunbookPreferences = signal<ReadonlyMap<string, boolean>>(new Map());
   private readonly currentRoute = signal(this.router.url);
   readonly activePage = computed(() => {
     const route = this.currentRoute();
@@ -111,7 +112,7 @@ export class WorkspacePagesService {
 
   /** Creates or returns the unique data tab for a connection, schema, and table. */
   registerOpenedTableData(connectionId: string, schema: string, table: string): TableDataPage {
-    const id = JSON.stringify(['data', connectionId, schema, table]);
+    const id = this.dataPageId(connectionId, schema, table);
     console.log(`registerOPenTableData ${id}`);
     let page = this.dataPages().find((candidate) => candidate.id === id);
     if (!page) {
@@ -133,6 +134,21 @@ export class WorkspacePagesService {
     return page;
   }
 
+  /** Returns the data page's Runbook preference, which survives route component changes. */
+  saveDataChangesToRunbook(connectionId: string, schema: string, table: string): boolean {
+    return this.dataRunbookPreferences().get(this.dataPageId(connectionId, schema, table)) ?? false;
+  }
+
+  /** Stores the Runbook preference for one open data page. */
+  setSaveDataChangesToRunbook(connectionId: string, schema: string, table: string, enabled: boolean): void {
+    const id = this.dataPageId(connectionId, schema, table);
+    this.dataRunbookPreferences.update((current) => {
+      const next = new Map(current);
+      next.set(id, enabled);
+      return next;
+    });
+  }
+
   /** Activates a data tab and its owning database connection. */
   selectDataPage(page: TableDataPage): void {
     this.connections.selectConnection(page.connectionId);
@@ -143,6 +159,12 @@ export class WorkspacePagesService {
   closeDataPage(page: TableDataPage): void {
     const wasActive = this.activeDataPage()?.id === page.id;
     this.dataPages.update((pages) => pages.filter((candidate) => candidate.id !== page.id));
+    this.dataRunbookPreferences.update((current) => {
+      if (!current.has(page.id)) return current;
+      const next = new Map(current);
+      next.delete(page.id);
+      return next;
+    });
     if (!wasActive) return;
     const nextDataPage = this.dataPages().at(-1);
     if (nextDataPage) this.selectDataPage(nextDataPage);
@@ -415,8 +437,15 @@ export class WorkspacePagesService {
       || this.dataPages().some((page) => page.connectionId === connectionId && page.route === currentRoute)
       || this.createTablePages().some((page) => page.connectionId === connectionId && page.route === currentRoute)
       || this.relationshipPages().some((page) => page.connectionId === connectionId && page.route === currentRoute);
+    const removedDataPageIds = new Set(this.dataPages().filter((page) => page.connectionId === connectionId).map(({ id }) => id));
     this.pages.update((pages) => pages.filter((page) => page.connectionId !== connectionId));
     this.dataPages.update((pages) => pages.filter((page) => page.connectionId !== connectionId));
+    this.dataRunbookPreferences.update((current) => {
+      if (![...removedDataPageIds].some((id) => current.has(id))) return current;
+      const next = new Map(current);
+      for (const id of removedDataPageIds) next.delete(id);
+      return next;
+    });
     this.relationshipPages.update((pages) => pages.filter((page) => page.connectionId !== connectionId));
     const removedCreatePages = this.createTablePages().filter((page) => page.connectionId === connectionId);
     const removedIds = new Set(removedCreatePages.map(({ id }) => id));
@@ -455,5 +484,10 @@ export class WorkspacePagesService {
   isActiveTable(connectionId: string, schema: string, table: string): boolean {
     const active = this.activePage();
     return active?.connectionId === connectionId && active.schema === schema && active.table === table;
+  }
+
+  /** Creates the stable workspace key shared by a data tab and its local view preferences. */
+  private dataPageId(connectionId: string, schema: string, table: string): string {
+    return JSON.stringify(['data', connectionId, schema, table]);
   }
 }

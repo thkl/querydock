@@ -91,8 +91,8 @@
         <p>{{ displayFields().length }} {{ displayFields().length === 1 ? 'field' : 'fields' }}</p>
         @if (table.canAlter) {
         <p class="fields-instructions">Use <strong>Add row</strong> to add a field, or edit a supported field’s name,
-          type, size, default, or identity generation. New fields are nullable unless identity generation is selected.
-          Identity generation is available for smallint, integer, and bigint fields.</p>
+          type, size, default, or identity generation. Choose a type-matched default preset or enter a custom SQL
+          expression. Integer auto-increment is available through Identity for smallint, integer, and bigint fields.</p>
         }
       </div>
       <span class="metadata-label">{{ uncommittedSchemaChangeCount() ? 'BASELINE + DRAFTS' : 'CURRENT STRUCTURE'

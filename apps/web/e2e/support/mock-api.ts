@@ -19,9 +19,9 @@ export const resources = [
 ];
 
 export const editableTypes = [
-  { value: 'text', label: 'text', typeSchema: 'pg_catalog', typeName: 'text', identityGenerationSupported: false },
-  { value: 'varchar', label: 'varchar', typeSchema: 'pg_catalog', typeName: 'varchar', identityGenerationSupported: false },
-  { value: 'integer', label: 'integer', typeSchema: 'pg_catalog', typeName: 'int4', identityGenerationSupported: true },
+  { value: 'text', label: 'text', typeSchema: 'pg_catalog', typeName: 'text', identityGenerationSupported: false, defaultExpressions: [{ value: "''", label: 'Empty text' }] },
+  { value: 'varchar', label: 'varchar', typeSchema: 'pg_catalog', typeName: 'varchar', identityGenerationSupported: false, defaultExpressions: [{ value: "''", label: 'Empty text' }] },
+  { value: 'integer', label: 'integer', typeSchema: 'pg_catalog', typeName: 'int4', identityGenerationSupported: true, defaultExpressions: [{ value: '0', label: 'Zero' }] },
 ];
 
 export const tableSnapshot = {

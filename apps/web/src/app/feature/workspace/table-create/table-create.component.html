@@ -38,7 +38,13 @@
               </select>
             </label>
             <label class="type-details"><span>Size / precision</span><input [value]="field.typeDetails" (input)="updateField(field.id, 'typeDetails', $any($event.target).value)" placeholder="Varchar: 255 · Numeric: 12, 2" /></label>
-            <label><span>Default expression</span><input [value]="field.defaultExpression" (input)="updateField(field.id, 'defaultExpression', $any($event.target).value)" placeholder="Optional" /></label>
+            <label><span>Default expression</span><input [value]="field.defaultExpression" (input)="updateField(field.id, 'defaultExpression', $any($event.target).value)" placeholder="Custom SQL expression" />
+              <select aria-label="Choose a default preset" [disabled]="!defaultPresets(field.type).length" (change)="applyDefaultPreset(field.id, $any($event.target))">
+                <option value="">Choose preset…</option>
+                <option value="__clear_default__">Remove default</option>
+                @for (preset of defaultPresets(field.type); track preset.value) { <option [value]="preset.value">{{ preset.label }}</option> }
+              </select>
+            </label>
             <label><span>Identity</span>
               <select [value]="field.identityGeneration" (change)="updateField(field.id, 'identityGeneration', $any($event.target).value)">
                 <option value="none">None</option>

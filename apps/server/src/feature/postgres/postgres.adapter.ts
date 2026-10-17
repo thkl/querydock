@@ -22,6 +22,7 @@ import type {
   TableDataQueryResponse,
   TableDataRowUpdate,
   TableDataRowInsert,
+  DataRunbookPreviewResponse,
 } from '@querydock/contracts';
 
 interface ResourceRow {
@@ -53,18 +54,26 @@ interface FieldRow {
 }
 
 const POSTGRES_EDITABLE_FIELD_TYPES = [
-  { value: 'text', label: 'Text', typeSchema: 'pg_catalog', typeName: 'text', identityGenerationSupported: false },
-  { value: 'varchar', label: 'Varchar', typeSchema: 'pg_catalog', typeName: 'varchar', identityGenerationSupported: false },
-  { value: 'smallint', label: 'Small integer', typeSchema: 'pg_catalog', typeName: 'int2', identityGenerationSupported: true },
-  { value: 'integer', label: 'Integer', typeSchema: 'pg_catalog', typeName: 'int4', identityGenerationSupported: true },
-  { value: 'bigint', label: 'Big integer', typeSchema: 'pg_catalog', typeName: 'int8', identityGenerationSupported: true },
-  { value: 'numeric', label: 'Numeric', typeSchema: 'pg_catalog', typeName: 'numeric', identityGenerationSupported: false },
-  { value: 'boolean', label: 'Boolean', typeSchema: 'pg_catalog', typeName: 'bool', identityGenerationSupported: false },
-  { value: 'uuid', label: 'UUID', typeSchema: 'pg_catalog', typeName: 'uuid', identityGenerationSupported: false },
-  { value: 'date', label: 'Date', typeSchema: 'pg_catalog', typeName: 'date', identityGenerationSupported: false },
-  { value: 'timestamptz', label: 'Timestamp with time zone', typeSchema: 'pg_catalog', typeName: 'timestamptz', identityGenerationSupported: false },
-  { value: 'jsonb', label: 'JSON', typeSchema: 'pg_catalog', typeName: 'jsonb', identityGenerationSupported: false },
+  { value: 'text', label: 'Text', typeSchema: 'pg_catalog', typeName: 'text', identityGenerationSupported: false, defaultExpressions: [{ value: "''", label: 'Empty text' }] },
+  { value: 'varchar', label: 'Varchar', typeSchema: 'pg_catalog', typeName: 'varchar', identityGenerationSupported: false, defaultExpressions: [{ value: "''", label: 'Empty text' }] },
+  { value: 'smallint', label: 'Small integer', typeSchema: 'pg_catalog', typeName: 'int2', identityGenerationSupported: true, defaultExpressions: [{ value: '0', label: 'Zero' }] },
+  { value: 'integer', label: 'Integer', typeSchema: 'pg_catalog', typeName: 'int4', identityGenerationSupported: true, defaultExpressions: [{ value: '0', label: 'Zero' }] },
+  { value: 'bigint', label: 'Big integer', typeSchema: 'pg_catalog', typeName: 'int8', identityGenerationSupported: true, defaultExpressions: [{ value: '0', label: 'Zero' }] },
+  { value: 'numeric', label: 'Numeric', typeSchema: 'pg_catalog', typeName: 'numeric', identityGenerationSupported: false, defaultExpressions: [{ value: '0', label: 'Zero' }] },
+  { value: 'boolean', label: 'Boolean', typeSchema: 'pg_catalog', typeName: 'bool', identityGenerationSupported: false, defaultExpressions: [{ value: 'FALSE', label: 'False' }, { value: 'TRUE', label: 'True' }] },
+  { value: 'uuid', label: 'UUID', typeSchema: 'pg_catalog', typeName: 'uuid', identityGenerationSupported: false, defaultExpressions: [{ value: 'gen_random_uuid()', label: 'Random UUID' }] },
+  { value: 'date', label: 'Date', typeSchema: 'pg_catalog', typeName: 'date', identityGenerationSupported: false, defaultExpressions: [{ value: 'CURRENT_DATE', label: 'Current date' }] },
+  { value: 'timestamptz', label: 'Timestamp with time zone', typeSchema: 'pg_catalog', typeName: 'timestamptz', identityGenerationSupported: false, defaultExpressions: [{ value: 'CURRENT_TIMESTAMP', label: 'Current timestamp' }] },
+  { value: 'jsonb', label: 'JSON', typeSchema: 'pg_catalog', typeName: 'jsonb', identityGenerationSupported: false, defaultExpressions: [{ value: "'{}'::jsonb", label: 'Empty object' }, { value: "'[]'::jsonb", label: 'Empty array' }] },
 ] as const;
+
+/** Returns mutable API descriptors without exposing the adapter's preset constants. */
+function postgresEditableFieldTypes() {
+  return POSTGRES_EDITABLE_FIELD_TYPES.map((fieldType) => ({
+    ...fieldType,
+    defaultExpressions: fieldType.defaultExpressions.map((expression) => ({ ...expression })),
+  }));
+}
 
 const POSTGRES_EDITABLE_IDENTITY_GENERATIONS = [
   { value: 'none', label: 'None' },
@@ -133,7 +142,7 @@ export class PostgresAdapter {
 
   /** Returns a defensive copy of the PostgreSQL field types exposed to schema editors. */
   editableFieldTypes() {
-    return [...POSTGRES_EDITABLE_FIELD_TYPES];
+    return postgresEditableFieldTypes();
   }
 
   /** Opens a short-lived client and retrieves the connected server version. */
@@ -313,6 +322,36 @@ export class PostgresAdapter {
         await client.query('ROLLBACK').catch(() => undefined);
         throw error;
       }
+    });
+  }
+
+  /** Builds reviewed SQL for staged data operations against a fresh server-side table snapshot. */
+  async previewDataRunbook(
+    configuration: PostgresConnectRequest,
+    schema: string,
+    table: string,
+    operations: Extract<SchemaOperation, { kind: 'updateDataRow' | 'insertDataRow' }>[],
+  ): Promise<DataRunbookPreviewResponse> {
+    validatePostgresIdentifier(schema, 'schema');
+    validatePostgresIdentifier(table, 'table');
+    return this.withClient(configuration, async (client) => {
+      const snapshot = await this.inspectTableWithClient(client, schema, table);
+      if (!snapshot) throw new MigrationPlanError('not-found', 'The requested table was not found or is not visible to this user.');
+      validateDataRowOperationBatch(operations);
+      const previewRequest: MigrationPreviewRequest = {
+        schema,
+        table,
+        baselineFingerprint: snapshot.fingerprint,
+        operations,
+      };
+      return {
+        snapshot,
+        preview: {
+          baselineFingerprint: snapshot.fingerprint,
+          statements: createMigrationPreview(snapshot, previewRequest),
+          warnings: collectMigrationWarnings(snapshot, operations),
+        },
+      };
     });
   }
 
@@ -749,7 +788,7 @@ export class PostgresAdapter {
 
     return {
       ...baseline,
-      editableFieldTypes: [...POSTGRES_EDITABLE_FIELD_TYPES],
+      editableFieldTypes: postgresEditableFieldTypes(),
       editableIdentityGenerations: resource.canAlter && ['table', 'partitionedTable'].includes(resource.kind)
         ? [...POSTGRES_EDITABLE_IDENTITY_GENERATIONS]
         : [],
@@ -1646,8 +1685,15 @@ function updateDataRowStatement(snapshot: TableSnapshot, update: TableDataRowUpd
   if (!changeNames.length) throw new MigrationPlanError('invalid', 'Change at least one editable field before saving.');
   for (const name of changeNames) {
     const field = fieldByName.get(name);
-    if (!field || field.generated || field.identityGeneration || primaryKey.includes(name)) {
-      throw new MigrationPlanError('invalid', `The field "${name}" cannot be changed in the data grid.`);
+    if (!field) throw new MigrationPlanError('invalid', `The field "${name}" is no longer part of this table. Refresh the data grid and try again.`);
+    if (primaryKey.includes(name)) {
+      throw new MigrationPlanError('invalid', `The field "${name}" is part of the primary key and cannot be changed in the data grid.`);
+    }
+    if (field.generated) {
+      throw new MigrationPlanError('invalid', `The field "${name}" is database-generated and cannot be changed in the data grid.`);
+    }
+    if (field.identityGeneration) {
+      throw new MigrationPlanError('invalid', `The field "${name}" is an identity field and cannot be changed in the data grid.`);
     }
   }
   const assignments = changeNames.map((name) => `${quoteIdentifier(name)} = ${sqlLiteral(update.changes[name])}`);
@@ -1931,7 +1977,7 @@ function constraintKind(
 /** Maps known PostgreSQL errors to actionable messages without exposing driver details. */
 function safeDatabaseMessage(error: unknown): string {
   const details = typeof error === 'object' && error !== null
-    ? error as { code?: unknown; message?: unknown }
+    ? error as { code?: unknown; message?: unknown; schema?: unknown; table?: unknown; column?: unknown }
     : undefined;
   const code = typeof details?.code === 'string' ? details.code : '';
   const databaseMessage = typeof details?.message === 'string' ? details.message : '';
@@ -1940,6 +1986,13 @@ function safeDatabaseMessage(error: unknown): string {
   if (code === '42501') return 'The PostgreSQL user does not have permission to inspect this resource.';
   if (code === '42804') return 'The local and referenced foreign-key fields must use compatible PostgreSQL types.';
   if (code === '23503') return 'Existing rows violate the foreign key. Check that each local value has a matching referenced row.';
+  if (code === '23502') {
+    const column = typeof details?.column === 'string' ? `field "${details.column}"` : 'a required field';
+    const relation = typeof details?.schema === 'string' && typeof details?.table === 'string'
+      ? ` on ${details.schema}.${details.table}`
+      : '';
+    return `PostgreSQL could not insert the row${relation}: ${column} is NOT NULL, but the value was NULL or omitted without a default. Enter a value, or add a database default / allow NULL before inserting the row.`;
+  }
   if (code === '42703' && databaseMessage.includes('indnkeyatts')) {
     return 'This PostgreSQL version does not expose the index metadata needed to list foreign-key target fields. Use PostgreSQL 11 or later.';
   }

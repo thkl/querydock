@@ -18,14 +18,17 @@
     </header>
     <div class="data-toolbar">
       @if (canUpdateRows() || canInsertRows()) {
-        <label class="runbook-toggle">
-          <input
-            type="checkbox"
-            [checked]="saveChangesToRunbook()"
-            (change)="saveChangesToRunbook.set($any($event.target).checked)"
-          />
-          <span>Save changes to Runbook</span>
-        </label>
+        <div class="runbook-option">
+          <label class="runbook-toggle">
+            <input
+              type="checkbox"
+              [checked]="saveChangesToRunbook()"
+              (change)="setSaveChangesToRunbook($any($event.target).checked)"
+            />
+            <span>Save changes to Runbook</span>
+          </label>
+          <span class="runbook-note">Changes become permanent when you apply the Runbook.</span>
+        </div>
       } @else {
         <span class="read-only-notice">This database account can browse but cannot edit or add rows.</span>
       }

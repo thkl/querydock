@@ -79,7 +79,9 @@ export class TableDataComponent {
       this.canUpdateRows.set(false);
       this.canInsertRows.set(false);
       this.newRows.clear();
-      this.saveChangesToRunbook.set(false);
+      this.saveChangesToRunbook.set(connection && table
+        ? this.workspacePages.saveDataChangesToRunbook(connection.connectionId, schema, table)
+        : false);
       this.gridControl.setPage(1);
       this.gridState = this.createGridState();
       this.provider.set(this.gridState.provider);
@@ -108,24 +110,48 @@ export class TableDataComponent {
     void this.loadRows(query, gridProvider);
   }
 
+  /** Keeps the Runbook toggle with this workspace page while its route component is replaced. */
+  setSaveChangesToRunbook(enabled: boolean): void {
+    this.saveChangesToRunbook.set(enabled);
+    const [params, query] = this.routeState();
+    const connection = this.connections.activeConnection();
+    const table = params.get('tableName');
+    if (connection && table) {
+      this.workspacePages.setSaveDataChangesToRunbook(
+        connection.connectionId,
+        query.get('schema') ?? 'public',
+        table,
+        enabled,
+      );
+    }
+  }
+
   /** Creates a row-editable grid; provider events still save only after a row is completed. */
   private createGridState(): {
     datasource: AgridDataSource<TableDataRow>;
     provider: AgridProvider<TableDataRow>;
   } {
     const datasource = new AgridDataSource<TableDataRow>([]);
+    return { datasource, provider: this.createProvider(datasource, [], false) };
+  }
 
-    const provider = new AgridProvider<TableDataRow>({
+  /** Creates a provider from the current table permissions so aGrid derives its controls correctly. */
+  private createProvider(
+    datasource: AgridDataSource<TableDataRow>,
+    columns: ColDef<TableDataRow>[],
+    allowAddRows: boolean,
+  ): AgridProvider<TableDataRow> {
+    return new AgridProvider<TableDataRow>({
       datasource,
       control: this.gridControl,
-      columns: [],
+      columns,
       readonly: false,
       serverSideFiltering: true,
       enableQuickFilter: true,
       showFilterPanel: true,
       showSidebar: true,
       hideGridStatusBar: false,
-      allowAddRows: false,
+      allowAddRows,
       showChangedCellIndicator: true,
       zebraStripes: true,
       rowSelection: 'single',
@@ -135,7 +161,6 @@ export class TableDataComponent {
       resizableSidebar: true,
       emptyText: 'This table has no rows. The column headers are still available for filtering and sorting.',
     });
-    return { datasource, provider };
   }
 
   /** Loads the page and query criteria emitted by aGrid, discarding stale responses. */
@@ -171,21 +196,25 @@ export class TableDataComponent {
       this.newRows.clear();
       this.canUpdateRows.set(result.canUpdateRows);
       this.canInsertRows.set(result.canInsertRows);
-      gridProvider.allowAddRows = result.canInsertRows;
       this.gridControl.setTotalRows(result.totalRows);
+      const columns: ColDef<TableDataRow>[] = result.columns.map((column) => ({
+        field: column.name,
+        header: column.name,
+        type: 'text',
+        editable: column.editable || column.insertable,
+        cellReadonly: ({ originalIndex }) => this.newRows.has(originalIndex)
+          ? !column.insertable || !this.canInsertRows()
+          : !column.editable || !this.canUpdateRows(),
+        width: column.name.length > 18 ? 190 : 150,
+      }));
       if (!sameColumns(this.currentColumns, result.columns)) {
         this.currentColumns = result.columns;
-        const columns: ColDef<TableDataRow>[] = result.columns.map((column) => ({
-          field: column.name,
-          header: column.name,
-          type: 'text',
-          editable: column.editable || column.insertable,
-          cellReadonly: ({ originalIndex }) => this.newRows.has(originalIndex)
-            ? !column.insertable || !this.canInsertRows()
-            : !column.editable || !this.canUpdateRows(),
-          width: column.name.length > 18 ? 190 : 150,
-        }));
         gridProvider.columns.set(columns);
+      }
+      if (gridProvider.allowAddRows !== result.canInsertRows) {
+        const nextProvider = this.createProvider(this.gridState.datasource, columns, result.canInsertRows);
+        this.gridState = { datasource: this.gridState.datasource, provider: nextProvider };
+        this.provider.set(nextProvider);
       }
       this.error.set(null);
       this.loaded.set(true);
@@ -234,8 +263,7 @@ export class TableDataComponent {
     this.error.set(null);
     try {
       if (this.saveChangesToRunbook()) {
-        const snapshot = await this.connections.inspectTable(connection.connectionId, schema, table);
-        await this.runbook.stageDataRowUpdate(connection, snapshot, update);
+        await this.runbook.stageDataRowUpdate(connection, schema, table, update);
         this.gridControl.clearChangedCells(event.originalIndex);
         this.error.set(null);
         return;
@@ -274,8 +302,7 @@ export class TableDataComponent {
     this.error.set(null);
     try {
       if (this.saveChangesToRunbook()) {
-        const snapshot = await this.connections.inspectTable(connection.connectionId, schema, table);
-        await this.runbook.stageDataRowInsert(connection, snapshot, insert);
+        await this.runbook.stageDataRowInsert(connection, schema, table, insert);
         this.gridControl.clearChangedCells(event.originalIndex);
         return;
       }

@@ -16,8 +16,10 @@ import type {
   TableDataQueryResponse,
   TableDataRowUpdate,
   TableDataRowInsert,
+  DataRunbookPreviewRequest,
+  DataRunbookPreviewResponse,
 } from '@querydock/contracts';
-import { tableDataQueryResponseSchema } from '@querydock/contracts';
+import { dataRunbookPreviewResponseSchema, tableDataQueryResponseSchema } from '@querydock/contracts';
 
 export class ApiRequestError extends Error {
   /** Retains the HTTP status while exposing the server's safe user-facing message. */
@@ -174,6 +176,24 @@ export class ConnectionApiService {
     return request<void>(`/api/connections/${path}`, {
       method: 'POST',
       body: JSON.stringify(update),
+    });
+  }
+
+  /** Requests a non-mutating server-generated SQL preview for data Runbook operations. */
+  previewDataRunbook(
+    connectionId: string,
+    schema: string,
+    table: string,
+    operations: DataRunbookPreviewRequest['operations'],
+  ): Promise<DataRunbookPreviewResponse> {
+    const path = [connectionId, 'tables', schema, table, 'data', 'runbook-preview'].map(encodeURIComponent).join('/');
+    return request<unknown>(`/api/connections/${path}?dryRun=true`, {
+      method: 'POST',
+      body: JSON.stringify({ operations }),
+    }).then((payload) => {
+      const parsed = dataRunbookPreviewResponseSchema.safeParse(payload);
+      if (!parsed.success) throw new Error('The server returned an invalid data Runbook preview.');
+      return parsed.data;
     });
   }
 

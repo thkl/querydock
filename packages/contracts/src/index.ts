@@ -81,6 +81,7 @@ export const editableFieldTypeDescriptorSchema = z.object({
   typeSchema: z.string(),
   typeName: z.string(),
   identityGenerationSupported: z.boolean(),
+  defaultExpressions: z.array(z.object({ value: z.string(), label: z.string() })).default([]),
 });
 export type EditableFieldTypeDescriptor = z.infer<typeof editableFieldTypeDescriptorSchema>;
 
@@ -321,6 +322,17 @@ export const migrationPreviewResponseSchema = z.object({
 });
 
 export type MigrationPreviewResponse = z.infer<typeof migrationPreviewResponseSchema>;
+
+export const dataRunbookPreviewRequestSchema = z.object({
+  operations: z.array(z.union([updateDataRowOperationSchema, insertDataRowOperationSchema])).min(1).max(50),
+});
+export type DataRunbookPreviewRequest = z.infer<typeof dataRunbookPreviewRequestSchema>;
+
+export const dataRunbookPreviewResponseSchema = z.object({
+  snapshot: tableSnapshotSchema,
+  preview: migrationPreviewResponseSchema,
+});
+export type DataRunbookPreviewResponse = z.infer<typeof dataRunbookPreviewResponseSchema>;
 
 export const schemaFieldDraftRequestSchema = z.object({
   schema: z.string().max(1024),

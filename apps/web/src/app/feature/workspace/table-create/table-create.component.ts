@@ -92,6 +92,18 @@ export class TableCreateComponent {
     return this.typeOptions().find((item) => item.value === type)?.identityGenerationSupported ?? false;
   }
 
+  /** Returns database-adapter default expressions supported by a field type. */
+  defaultPresets(type: string): { value: string; label: string }[] {
+    return this.typeOptions().find((item) => item.value === type)?.defaultExpressions ?? [];
+  }
+
+  /** Applies an adapter-provided default or clears the expression from the draft. */
+  applyDefaultPreset(id: number, select: HTMLSelectElement): void {
+    const expression = select.value === '__clear_default__' ? '' : select.value;
+    if (select.value) this.updateField(id, 'defaultExpression', expression);
+    select.value = '';
+  }
+
   /** Updates one field property and clears identity values unsupported by its new type. */
   updateField(id: number, property: CreateFieldValue, value: string | boolean): void {
     this.fields.update((fields) => fields.map((field) => {

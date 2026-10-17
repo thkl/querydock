@@ -5,6 +5,7 @@ import type {
   CreateTableField,
   MigrationApplyRequest,
   MigrationPreviewResponse,
+  DataRunbookPreviewRequest,
   SchemaFieldDraftRequest,
   SchemaOperation,
   TableSnapshot,
@@ -343,13 +344,14 @@ export class RunbookService {
   /** Stages one completed row edit as server-generated SQL in the database runbook. */
   async stageDataRowUpdate(
     connection: ConnectResponse,
-    snapshot: TableSnapshot,
+    schema: string,
+    table: string,
     update: TableDataRowUpdate,
   ): Promise<void> {
     await this.ready;
     this.error.set(null);
     const current = this.runbookForTarget(connection.target);
-    const matches = current && sameRunbookResource(current, connection.target, snapshot.schema, snapshot.name);
+    const matches = current && sameRunbookResource(current, connection.target, schema, table);
     if (current?.applyOutcomeUnknown) throw new Error('The previous Apply outcome is unknown. Inspect the database before staging or applying more changes.');
     if (current?.operations.length && !matches) {
       throw new Error('This database runbook has pending changes for another table. Apply or clear those changes before staging a row edit.');
@@ -359,25 +361,23 @@ export class RunbookService {
     }
 
     const identity = JSON.stringify(Object.entries(update.key).sort(([a], [b]) => a.localeCompare(b)));
-    const retained = (current?.operations ?? []).filter((operation) => operation.kind !== 'updateDataRow'
-      || JSON.stringify(Object.entries(operation.key).sort(([a], [b]) => a.localeCompare(b))) !== identity);
-    const operations: SchemaOperation[] = [...retained, { kind: 'updateDataRow', ...update }];
-    const baseline = current?.baseline ?? snapshot;
+    const retained = ((current?.operations ?? []).filter((operation) => operation.kind !== 'updateDataRow'
+      || JSON.stringify(Object.entries(operation.key).sort(([a], [b]) => a.localeCompare(b))) !== identity)) as DataRunbookPreviewRequest['operations'];
+    const operations = [...retained, { kind: 'updateDataRow' as const, ...update }];
     this.previewing.set(true);
     try {
-      const preview = await this.connections.previewMigration(connection.connectionId, {
-        schema: baseline.schema,
-        table: baseline.name,
-        baselineFingerprint: baseline.fingerprint,
-        operations,
-      });
+      const generated = await this.connections.previewDataRunbook(connection.connectionId, schema, table, operations);
+      if (matches && current?.baseline && current.baseline.fingerprint !== generated.snapshot.fingerprint) {
+        throw new Error('The table structure changed since this Runbook was started. Refresh the table and review the pending operations again.');
+      }
+      const baseline = matches ? current?.baseline ?? generated.snapshot : generated.snapshot;
       const runbook: SchemaRunbook = {
         target: connection.target,
         schema: baseline.schema,
         table: baseline.name,
         baseline,
         operations,
-        preview,
+        preview: generated.preview,
         appliedBatches: current?.appliedBatches ?? [],
         applyOutcomeUnknown: false,
       };
@@ -394,13 +394,14 @@ export class RunbookService {
   /** Stages one new grid row as reviewed SQL, replacing a prior edit to the same draft row. */
   async stageDataRowInsert(
     connection: ConnectResponse,
-    snapshot: TableSnapshot,
+    schema: string,
+    table: string,
     insert: TableDataRowInsert,
   ): Promise<void> {
     await this.ready;
     this.error.set(null);
     const current = this.runbookForTarget(connection.target);
-    const matches = current && sameRunbookResource(current, connection.target, snapshot.schema, snapshot.name);
+    const matches = current && sameRunbookResource(current, connection.target, schema, table);
     if (current?.applyOutcomeUnknown) throw new Error('The previous Apply outcome is unknown. Inspect the database before staging or applying more changes.');
     if (current?.operations.length && !matches) {
       throw new Error('This database runbook has pending changes for another table. Apply or clear those changes before staging a row.');
@@ -408,25 +409,23 @@ export class RunbookService {
     if (current?.operations.some((operation) => operation.kind !== 'updateDataRow' && operation.kind !== 'insertDataRow')) {
       throw new Error('Apply or discard the pending schema changes before staging data rows.');
     }
-    const retained = (current?.operations ?? []).filter((operation) =>
-      operation.kind !== 'insertDataRow' || operation.draftId !== insert.draftId);
-    const operations: SchemaOperation[] = [...retained, { kind: 'insertDataRow', ...insert }];
-    const baseline = current?.baseline ?? snapshot;
+    const retained = ((current?.operations ?? []).filter((operation) =>
+      operation.kind !== 'insertDataRow' || operation.draftId !== insert.draftId)) as DataRunbookPreviewRequest['operations'];
+    const operations = [...retained, { kind: 'insertDataRow' as const, ...insert }];
     this.previewing.set(true);
     try {
-      const preview = await this.connections.previewMigration(connection.connectionId, {
-        schema: baseline.schema,
-        table: baseline.name,
-        baselineFingerprint: baseline.fingerprint,
-        operations,
-      });
+      const generated = await this.connections.previewDataRunbook(connection.connectionId, schema, table, operations);
+      if (matches && current?.baseline && current.baseline.fingerprint !== generated.snapshot.fingerprint) {
+        throw new Error('The table structure changed since this Runbook was started. Refresh the table and review the pending operations again.');
+      }
+      const baseline = matches ? current?.baseline ?? generated.snapshot : generated.snapshot;
       const runbook: SchemaRunbook = {
         target: connection.target,
         schema: baseline.schema,
         table: baseline.name,
         baseline,
         operations,
-        preview,
+        preview: generated.preview,
         appliedBatches: current?.appliedBatches ?? [],
         applyOutcomeUnknown: false,
       };

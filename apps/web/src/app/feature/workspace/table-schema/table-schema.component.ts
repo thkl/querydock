@@ -31,6 +31,7 @@ import { ForeignKeyReferenceCellComponent } from './foreign-key-reference-cell.c
 import { CheckConstraintEditorState } from './check-constraint-editor-state';
 import { CheckConstraintHelpCellComponent } from './check-constraint-help-cell.component';
 import { CheckConstraintHelperComponent } from './check-constraint-helper.component';
+import { DefaultPresetEditorComponent } from './default-preset-editor.component';
 import { PrimaryKeyEditorState } from './primary-key-editor-state';
 import { PrimaryKeyFieldsCellComponent } from './primary-key-fields-cell.component';
 import { suggestConstraintName } from './constraint-name-suggestion';
@@ -51,6 +52,8 @@ interface SchemaFieldRow {
   typeIdentity: string;
   nullable: boolean;
   defaultValue: string;
+  defaultPreset: string;
+  defaultPresetOptions: { value: string; label: string }[];
   identityGeneration: 'none' | 'always' | 'byDefault';
   isUncommitted: boolean;
   isGridInput: boolean;
@@ -124,6 +127,8 @@ export class TableSchemaComponent {
       defaultValue: field.generated
           ? `GENERATED${field.generationExpression ? ` · ${field.generationExpression}` : ''}`
           : field.defaultExpression ?? '—',
+      defaultPreset: this.matchingDefaultPreset(field.editableType, field.defaultExpression),
+      defaultPresetOptions: this.defaultPresetsFor(field.editableType ?? ''),
       identityGeneration: field.identityGeneration ?? 'none',
       isUncommitted: false,
       isGridInput: false,
@@ -153,6 +158,8 @@ export class TableSchemaComponent {
           typeIdentity: this.typeIdentity(table, operation.type),
           nullable: operation.identityGeneration ? false : true,
           defaultValue: operation.defaultExpression ?? '—',
+          defaultPreset: this.matchingDefaultPreset(operation.type, operation.defaultExpression ?? null),
+          defaultPresetOptions: this.defaultPresetsFor(operation.type),
           identityGeneration: operation.identityGeneration ?? 'none',
           isUncommitted: true,
           isGridInput: false,
@@ -408,6 +415,8 @@ export class TableSchemaComponent {
       typeDetails: '',
       nullable: true,
       defaultValue: '—',
+      defaultPreset: '',
+      defaultPresetOptions: this.defaultPresetsFor(dataType),
       identityGeneration: 'none',
       isUncommitted: false,
       isGridInput: true,
@@ -513,19 +522,27 @@ export class TableSchemaComponent {
 
   /** Applies one field-cell edit to the local row while retaining staged changes. */
   onFieldCellEdit(event: GridEditEvent<SchemaFieldRow>): void {
-    if (!['name', 'dataType', 'typeDetails', 'defaultValue', 'nullable', 'identityGeneration'].includes(event.field)) return;
+    if (!['name', 'dataType', 'typeDetails', 'defaultValue', 'defaultPreset', 'nullable', 'identityGeneration'].includes(event.field)) return;
     const row = this.fieldDatasource.rows()[event.position.rowIndex];
     if (!row || (event.field === 'identityGeneration'
       ? !row.canEditIdentity
       : !row.isGridInput && !row.isUncommitted && !row.canEdit)) return;
     this.stageError.set(null);
-    const editedFields = [...new Set([...row.editedFields, event.field])];
+    const presetValue = event.field === 'defaultPreset' ? String(event.newValue ?? '') : null;
+    const defaultValue = event.field === 'defaultPreset' ? (presetValue || '—') : row.defaultValue;
+    const editedField = event.field === 'defaultPreset' ? 'defaultValue' : event.field;
+    const editedFields = [...new Set([...row.editedFields, editedField])];
     this.fieldDatasource.patchRow(event.position.rowIndex, {
+      ...(event.field === 'defaultPreset'
+        ? { defaultValue, defaultPreset: presetValue ?? '' }
+        : event.field === 'defaultValue' ? { defaultPreset: '' }
+          : event.field === 'dataType' ? { defaultPresetOptions: this.defaultPresetsFor(String(event.newValue ?? '')) }
+            : {}),
       editedFields,
       canEditIdentity: event.field === 'dataType' && (row.isGridInput || row.canEdit)
         ? this.identityGenerationAllowed(row.dataType)
         : row.canEditIdentity,
-      status: editedFields.includes('identityGeneration')
+      status: editedFields.includes('identityGeneration') || editedFields.includes('defaultValue')
         || (editedFields.includes('name') && editedFields.includes('dataType'))
         ? 'READY TO STAGE'
         : 'FILL NAME + TYPE',
@@ -946,6 +963,11 @@ export class TableSchemaComponent {
       },
       { field: 'defaultValue', header: 'Default', width: 260, editable: true,
         cellReadonly: (params: CellReadonlyParams<SchemaFieldRow>) => !params.row.isGridInput && !params.row.canEdit },
+      {
+        field: 'defaultPreset', header: 'Default preset', width: 200, editable: true,
+        cellEditor: DefaultPresetEditorComponent,
+        cellReadonly: ({ row }: CellReadonlyParams<SchemaFieldRow>) => !row.isGridInput && !row.canEdit,
+      },
       { field: 'status', header: 'Status', width: 190, cellRendererComponent: SchemaBadgeCellComponent, editable: false, locked: true },
     ];
   }
@@ -1119,6 +1141,19 @@ export class TableSchemaComponent {
   /** Checks whether the active adapter supports identity generation for a field type. */
   private identityGenerationAllowed(type: string): boolean {
     return this.snapshot()?.editableFieldTypes.find((item) => item.value === type)?.identityGenerationSupported ?? false;
+  }
+
+  /** Selects a known preset when a live or staged default exactly matches one. */
+  private matchingDefaultPreset(type: string | null, expression: string | null): string {
+    if (!type || !expression) return '';
+    return this.snapshot()?.editableFieldTypes
+      .find((item) => item.value === type)?.defaultExpressions
+      .find((preset) => preset.value === expression)?.value ?? '';
+  }
+
+  /** Returns adapter default suggestions for a field type. */
+  private defaultPresetsFor(type: string): { value: string; label: string }[] {
+    return this.snapshot()?.editableFieldTypes.find((item) => item.value === type)?.defaultExpressions ?? [];
   }
 
   /** Merges baseline constraints with staged edits into grid display rows. */
