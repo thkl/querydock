@@ -536,13 +536,13 @@ export class PostgresAdapter {
           SELECT attribute.attname AS name,
             pg_catalog.format_type(attribute.atttypid, attribute.atttypmod) AS "typeName",
             collation_namespace.nspname AS "collationSchema",
-            collation.collname AS "collationName",
-            collation.collisdeterministic AS "collationDeterministic"
+            coll.collname AS "collationName",
+            coll.collisdeterministic AS "collationDeterministic"
           FROM pg_catalog.pg_class relation
           JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace
           JOIN pg_catalog.pg_attribute attribute ON attribute.attrelid = relation.oid
-          LEFT JOIN pg_catalog.pg_collation collation ON collation.oid = attribute.attcollation
-          LEFT JOIN pg_catalog.pg_namespace collation_namespace ON collation_namespace.oid = collation.collnamespace
+          LEFT JOIN pg_catalog.pg_collation AS coll ON coll.oid = attribute.attcollation
+          LEFT JOIN pg_catalog.pg_namespace collation_namespace ON collation_namespace.oid = coll.collnamespace
           WHERE namespace.nspname = $1 AND relation.relname = $2
             AND attribute.attnum > 0 AND NOT attribute.attisdropped AND attribute.attname = ANY($3::text[])
         `, [sourceSchema, sourceTable, localFieldNames]),
@@ -550,13 +550,13 @@ export class PostgresAdapter {
           SELECT attribute.attname AS name,
             pg_catalog.format_type(attribute.atttypid, attribute.atttypmod) AS "typeName",
             collation_namespace.nspname AS "collationSchema",
-            collation.collname AS "collationName",
-            collation.collisdeterministic AS "collationDeterministic"
+            coll.collname AS "collationName",
+            coll.collisdeterministic AS "collationDeterministic"
           FROM pg_catalog.pg_class relation
           JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace
           JOIN pg_catalog.pg_attribute attribute ON attribute.attrelid = relation.oid
-          LEFT JOIN pg_catalog.pg_collation collation ON collation.oid = attribute.attcollation
-          LEFT JOIN pg_catalog.pg_namespace collation_namespace ON collation_namespace.oid = collation.collnamespace
+          LEFT JOIN pg_catalog.pg_collation AS coll ON coll.oid = attribute.attcollation
+          LEFT JOIN pg_catalog.pg_namespace collation_namespace ON collation_namespace.oid = coll.collnamespace
           WHERE namespace.nspname = $1 AND relation.relname = $2
             AND attribute.attnum > 0 AND NOT attribute.attisdropped
         `, [targetSchema, targetTable]),
@@ -646,6 +646,17 @@ export class PostgresAdapter {
       validateDataRowOperationBatch(request.operations);
       await validateForeignKeyTargets(client, snapshot, request.operations);
       await validateTableLifecycleTarget(client, snapshot, request.operations);
+      const plan: MigrationTablePlan = {
+        schema: request.schema,
+        table: request.table,
+        baselineFingerprint: request.baselineFingerprint,
+        operations: request.operations,
+      };
+      await this.validateMigrationBatchDependencies(
+        client,
+        [plan],
+        new Map([[JSON.stringify([plan.schema, plan.table]), snapshot]]),
+      );
       const preview = createMigrationPreview(snapshot, request);
       const warnings = collectMigrationWarnings(snapshot, request.operations);
       return { baselineFingerprint: snapshot.fingerprint, statements: preview, warnings };
@@ -741,6 +752,17 @@ export class PostgresAdapter {
           throw new MigrationPlanError('drift', 'The table changed since this preview was generated. Refresh the schema and review the draft again.');
         }
 
+        const plan: MigrationTablePlan = {
+          schema: request.schema,
+          table: request.table,
+          baselineFingerprint: request.baselineFingerprint,
+          operations: request.operations,
+        };
+        await this.validateMigrationBatchDependencies(
+          client,
+          [plan],
+          new Map([[JSON.stringify([plan.schema, plan.table]), snapshot]]),
+        );
         await validateForeignKeyTargets(client, snapshot, request.operations);
         await validateTableLifecycleTarget(client, snapshot, request.operations);
         const statements = createMigrationPreview(snapshot, request);
@@ -758,7 +780,7 @@ export class PostgresAdapter {
             throw new MigrationPlanError('drift', 'A staged row operation affected an unexpected number of rows. The transaction was rolled back; refresh the table and stage the operation again.');
           }
         }
-        const lifecycle = request.operations[0];
+        const lifecycle = request.operations.find((operation) => operation.kind === 'renameTable' || operation.kind === 'dropTable');
         const resultSchema = lifecycle?.kind === 'renameTable' ? lifecycle.newName : request.table;
         const updatedSnapshot = lifecycle?.kind === 'dropTable'
           ? null
@@ -874,7 +896,7 @@ export class PostgresAdapter {
     });
   }
 
-  /** Validates table plans, detects unresolved foreign-key blockers, and orders generated DDL. */
+  /** Validates table plans and detects unresolved foreign-key blockers before SQL is previewed or applied. */
   private async buildMigrationBatchPreview(
     client: Client,
     plans: MigrationTablePlan[],
@@ -1377,13 +1399,13 @@ async function validateForeignKeyTargets(
       SELECT attribute.attname AS name,
         pg_catalog.format_type(attribute.atttypid, attribute.atttypmod) AS "typeName",
         collation_namespace.nspname AS "collationSchema",
-        collation.collname AS "collationName",
-        collation.collisdeterministic AS "collationDeterministic"
+        coll.collname AS "collationName",
+        coll.collisdeterministic AS "collationDeterministic"
       FROM pg_catalog.pg_class relation
       JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace
       JOIN pg_catalog.pg_attribute attribute ON attribute.attrelid = relation.oid
-      LEFT JOIN pg_catalog.pg_collation collation ON collation.oid = attribute.attcollation
-      LEFT JOIN pg_catalog.pg_namespace collation_namespace ON collation_namespace.oid = collation.collnamespace
+      LEFT JOIN pg_catalog.pg_collation AS coll ON coll.oid = attribute.attcollation
+      LEFT JOIN pg_catalog.pg_namespace collation_namespace ON collation_namespace.oid = coll.collnamespace
       WHERE namespace.nspname = $1 AND relation.relname = $2
         AND attribute.attnum > 0 AND NOT attribute.attisdropped AND attribute.attname = ANY($3::text[])
     `, [operation.referencedSchema, operation.referencedTable, operation.referencedFieldNames]);
@@ -1393,13 +1415,13 @@ async function validateForeignKeyTargets(
       SELECT attribute.attname AS name,
         pg_catalog.format_type(attribute.atttypid, attribute.atttypmod) AS "typeName",
         collation_namespace.nspname AS "collationSchema",
-        collation.collname AS "collationName",
-        collation.collisdeterministic AS "collationDeterministic"
+        coll.collname AS "collationName",
+        coll.collisdeterministic AS "collationDeterministic"
       FROM pg_catalog.pg_class relation
       JOIN pg_catalog.pg_namespace namespace ON namespace.oid = relation.relnamespace
       JOIN pg_catalog.pg_attribute attribute ON attribute.attrelid = relation.oid
-      LEFT JOIN pg_catalog.pg_collation collation ON collation.oid = attribute.attcollation
-      LEFT JOIN pg_catalog.pg_namespace collation_namespace ON collation_namespace.oid = collation.collnamespace
+      LEFT JOIN pg_catalog.pg_collation AS coll ON coll.oid = attribute.attcollation
+      LEFT JOIN pg_catalog.pg_namespace collation_namespace ON collation_namespace.oid = coll.collnamespace
       WHERE namespace.nspname = $1 AND relation.relname = $2
         AND attribute.attnum > 0 AND NOT attribute.attisdropped AND attribute.attname = ANY($3::text[])
     `, [source.schema, source.name, operation.fieldNames]);
@@ -1596,10 +1618,11 @@ function normalizeFieldDraft(
 /** @internal Pure SQL generation helper; exported for the migration-plan unit tests. */
 export function createMigrationPreview(snapshot: TableSnapshot, request: MigrationPreviewRequest): string[] {
   validateDataRowOperationBatch(request.operations);
+  validateTableLifecycleOperations(request.operations);
   if (snapshot.kind !== 'table' && snapshot.kind !== 'partitionedTable') {
     throw new MigrationPlanError('invalid', 'Only PostgreSQL tables can be renamed, dropped, or altered.');
   }
-  const lifecycle = request.operations[0];
+  const lifecycle = request.operations.find((operation) => operation.kind === 'renameTable' || operation.kind === 'dropTable');
   if (lifecycle?.kind === 'renameTable') {
     validatePostgresIdentifier(lifecycle.newName, 'table');
     if (lifecycle.newName === snapshot.name) {
@@ -1607,7 +1630,7 @@ export function createMigrationPreview(snapshot: TableSnapshot, request: Migrati
     }
     return [`ALTER TABLE ${quoteIdentifier(snapshot.schema)}.${quoteIdentifier(snapshot.name)} RENAME TO ${quoteIdentifier(lifecycle.newName)};`];
   }
-  if (lifecycle?.kind === 'dropTable') {
+  if (lifecycle?.kind === 'dropTable' && request.operations.length === 1) {
     return [`DROP TABLE ${quoteIdentifier(snapshot.schema)}.${quoteIdentifier(snapshot.name)};`];
   }
   const table = `${quoteIdentifier(snapshot.schema)}.${quoteIdentifier(snapshot.name)}`;
@@ -1749,7 +1772,10 @@ export function createMigrationPreview(snapshot: TableSnapshot, request: Migrati
     if (operation.kind === 'deleteDataRow') return [deleteDataRowStatement(snapshot, operation)];
     return [];
   });
-  return [...schemaStatements, ...dataStatements];
+  const tableDropStatements = lifecycle?.kind === 'dropTable'
+    ? [`DROP TABLE ${quoteIdentifier(snapshot.schema)}.${quoteIdentifier(snapshot.name)};`]
+    : [];
+  return [...schemaStatements, ...dataStatements, ...tableDropStatements];
 }
 
 /** Keeps row writes isolated from schema changes while allowing several completed rows per batch. */
@@ -1983,11 +2009,19 @@ function migrationStatementPhase(operation: SchemaOperation, snapshot: TableSnap
   }
 }
 
-/** Enforces that table rename and drop operations run as their own batch. */
+/** Keeps renames isolated while allowing explicit constraint removals before a table drop. */
 function validateTableLifecycleOperations(operations: SchemaOperation[]): void {
   const lifecycle = operations.filter((operation) => operation.kind === 'renameTable' || operation.kind === 'dropTable');
-  if (lifecycle.length && (lifecycle.length !== 1 || operations.length !== 1)) {
-    throw new MigrationPlanError('invalid', 'Rename or drop a table in its own runbook batch.');
+  if (!lifecycle.length) return;
+  if (lifecycle.length !== 1) {
+    throw new MigrationPlanError('invalid', 'A table plan can contain only one rename or drop operation.');
+  }
+  if (lifecycle[0]?.kind === 'renameTable' && operations.length !== 1) {
+    throw new MigrationPlanError('invalid', 'Rename a table in its own runbook plan.');
+  }
+  if (lifecycle[0]?.kind === 'dropTable'
+    && operations.some((operation) => operation.kind !== 'dropConstraint' && operation.kind !== 'dropTable')) {
+    throw new MigrationPlanError('invalid', 'A table drop can include constraint removals, but no field or constraint additions.');
   }
 }
 

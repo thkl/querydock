@@ -253,7 +253,7 @@ export class RunbookService {
     await this.stageSchemaOperations(connection, snapshot, operation ? [operation] : [], [replacementName]);
   }
 
-  /** Stages a table rename or drop as an isolated lifecycle batch. */
+  /** Stages a rename or drop, retaining staged foreign-key removals before a drop. */
   async stageTableOperation(
     connection: ConnectResponse,
     snapshot: TableSnapshot,
@@ -268,16 +268,26 @@ export class RunbookService {
     if (changes.some((plan) => plan.operations.some(isDataOperation))) {
       throw new Error('Apply or discard pending data changes before staging table schema changes.');
     }
-    if (existingPlan?.operations.length && existingPlan.operations.some((candidate) =>
-      candidate.kind !== 'renameTable' && candidate.kind !== 'dropTable')) {
+    const existingOperations = existingPlan?.operations ?? [];
+    const canDropAfterStagingForeignKeyRemovals = operation.kind === 'dropTable'
+      && existingOperations.length > 0
+      && existingOperations.every((candidate) => candidate.kind === 'dropConstraint'
+        && (existingPlan?.baseline ?? snapshot).constraints.some(({ name, kind }) =>
+          name === candidate.name && kind === 'foreignKey'));
+    if (existingOperations.length && existingOperations.some((candidate) =>
+      candidate.kind !== 'renameTable' && candidate.kind !== 'dropTable')
+      && !canDropAfterStagingForeignKeyRemovals) {
       throw new Error('Apply or discard the pending field and constraint changes before renaming or dropping this table.');
     }
     const baseline = existingPlan?.baseline ?? snapshot;
+    const operations = canDropAfterStagingForeignKeyRemovals
+      ? [...existingOperations, operation]
+      : [operation];
     const nextChanges = this.replaceTableChange(changes, {
       schema: baseline.schema,
       table: baseline.name,
       baseline,
-      operations: [operation],
+      operations,
     });
     this.previewing.set(true);
     try {
@@ -744,7 +754,8 @@ export class RunbookService {
       return;
     }
 
-    const tableOperation = current.operations[0];
+    const tableOperation = current.operations.find((operation) =>
+      operation.kind === 'renameTable' || operation.kind === 'dropTable');
     if (tableOperation?.kind === 'renameTable' || tableOperation?.kind === 'dropTable') {
       const oldTable = current.table;
       const newTable = tableOperation.kind === 'renameTable' ? tableOperation.newName : null;

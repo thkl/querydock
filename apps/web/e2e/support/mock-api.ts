@@ -61,6 +61,7 @@ export interface ApiCall {
 export async function installMockApi(page: Page, options: MockApiOptions = {}): Promise<ApiCall[]> {
   const calls: ApiCall[] = [];
   let connected = connection;
+  let currentResources = [...resources];
   await page.route('**/api/**', async (route: Route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -88,7 +89,7 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}): 
       };
       return route.fulfill({ json: connected });
     }
-    if (path.endsWith('/resources') && method === 'GET') return route.fulfill({ json: resources });
+    if (path.endsWith('/resources') && method === 'GET') return route.fulfill({ json: currentResources });
     if (path.endsWith('/schema/field-types') && method === 'GET') return route.fulfill({ json: editableTypes });
     if (path.endsWith('/tables') && method === 'GET') {
       const tableName = url.searchParams.get('table') ?? 'customers';
@@ -121,7 +122,44 @@ export async function installMockApi(page: Page, options: MockApiOptions = {}): 
     }
     if (path.endsWith('/migrations/apply') && method === 'POST') {
       if (options.applyStatus && options.applyStatus !== 200) return route.fulfill({ status: options.applyStatus, json: { message: 'The migration was rejected by the database. No changes were applied.' } });
-      return route.fulfill({ json: { appliedStatements: body?.reviewedStatements ?? [], snapshots: [{ ...tableSnapshot }] } });
+      const plans = Array.isArray(body?.tablePlans)
+        ? body.tablePlans as Array<Record<string, unknown>>
+        : [body ?? {}];
+      const tableResults: Array<Record<string, unknown>> = [];
+      const snapshots: Array<Record<string, unknown>> = [];
+      for (const plan of plans) {
+        const schema = String(plan.schema ?? 'public');
+        const table = String(plan.table ?? 'customers');
+        const operations = Array.isArray(plan.operations) ? plan.operations as Array<Record<string, unknown>> : [];
+        const lifecycle = operations.find((operation) => ['createTable', 'renameTable', 'dropTable'].includes(String(operation.kind)));
+        if (lifecycle?.kind === 'dropTable') {
+          currentResources = currentResources.filter((resource) => resource.schema !== schema || resource.name !== table);
+          tableResults.push({ schema, table, resultingTable: null, snapshot: null });
+        } else if (lifecycle?.kind === 'renameTable') {
+          const newName = String(lifecycle.newName);
+          currentResources = currentResources.map((resource) =>
+            resource.schema === schema && resource.name === table ? { ...resource, name: newName } : resource);
+          const snapshot = { ...tableSnapshot, schema, name: newName };
+          snapshots.push(snapshot);
+          tableResults.push({ schema, table, resultingTable: newName, snapshot });
+        } else if (lifecycle?.kind === 'createTable') {
+          const newName = String(lifecycle.table);
+          if (!currentResources.some((resource) => resource.schema === schema && resource.name === newName)) {
+            currentResources.push({ schema, name: newName, kind: 'table', isUpdatable: true, canCreateTable: false });
+          }
+          const snapshot = { ...tableSnapshot, schema, name: newName };
+          snapshots.push(snapshot);
+          tableResults.push({ schema, table, resultingTable: newName, snapshot });
+        } else {
+          const snapshot = { ...tableSnapshot, schema, name: table };
+          snapshots.push(snapshot);
+          tableResults.push({ schema, table, resultingTable: table, snapshot });
+        }
+      }
+      return route.fulfill({ json: {
+        appliedStatements: body?.reviewedStatements ?? [], snapshots,
+        tableResults,
+      } });
     }
     if (path.includes('/foreign-key-targets/') && method === 'POST') {
       return route.fulfill({ json: { fieldSets: [{ fieldNames: ['id'], label: 'id', compatible: true, reason: null }] } });
@@ -140,13 +178,22 @@ export async function connectFromHome(
 ): Promise<void> {
   await page.goto('/');
   await page.getByRole('button', { name: 'Add / Open connection' }).click();
-  const dialog = page.getByRole('dialog', { name: 'Connect to PostgreSQL' });
-  await dialog.getByLabel('Database').fill(database);
+  const dialog = page.getByRole('dialog', { name: 'Connect to a database' });
+  await dialog.getByRole('textbox', { name: 'Database' }).fill(database);
   await dialog.getByLabel('Username').fill(username);
   await dialog.getByLabel('Password').fill('test-password');
   await dialog.getByLabel('Password').press('Enter');
   if (connected) {
-    await expect(page.locator('.connection-item').filter({ hasText: username })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Open table structure' })).toBeVisible();
+    await expect(page.getByRole('treeitem').filter({ hasText: username })).toBeVisible();
+    await expect(page.getByRole('treeitem').filter({ hasText: 'customers' }).last()).toBeVisible();
   }
+}
+
+export async function openTableSchema(page: Page, table = 'customers'): Promise<void> {
+  await page.getByRole('treeitem').filter({ hasText: table }).last().click();
+}
+
+export async function openTreeMenu(page: Page, label: string): Promise<void> {
+  const node = page.getByRole('treeitem').filter({ hasText: label }).last();
+  await node.getByRole('button', { name: new RegExp(`Open menu for .*${label}`) }).click();
 }

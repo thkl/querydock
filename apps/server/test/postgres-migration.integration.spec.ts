@@ -160,13 +160,21 @@ describe.skipIf(!databaseUrl)('PostgreSQL migration integration (disposable data
 
     const parentWithDependency = await adapter.inspectTable(configuration, schema, 'parent');
     if (!parentWithDependency) throw new Error('The parent table disappeared before restricted-drop check.');
-    const restrictedDrop = await adapter.previewMigration(configuration, {
+    const restrictedDrop: MigrationPreviewRequest = {
       schema, table: 'parent', baselineFingerprint: parentWithDependency.fingerprint, operations: [{ kind: 'dropTable' }],
+    };
+    await expect(adapter.previewMigration(configuration, restrictedDrop)).rejects.toMatchObject({
+      kind: 'invalid',
+      message: expect.stringContaining('child (constraint "child_parent_fk")'),
     });
     await expect(adapter.applyMigration(configuration, {
-      schema, table: 'parent', baselineFingerprint: parentWithDependency.fingerprint, operations: [{ kind: 'dropTable' }],
-      reviewedStatements: restrictedDrop.statements, acknowledgedWarnings: restrictedDrop.warnings,
-    })).rejects.toBeInstanceOf(MigrationPlanError);
+      ...restrictedDrop,
+      reviewedStatements: [],
+      acknowledgedWarnings: [],
+    })).rejects.toMatchObject({
+      kind: 'invalid',
+      message: expect.stringContaining('child (constraint "child_parent_fk")'),
+    });
     expect(await adapter.inspectTable(configuration, schema, 'parent')).toBeDefined();
 
     const parentDropBaseline = await adapter.inspectTable(configuration, schema, 'parent');
