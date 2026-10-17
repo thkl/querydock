@@ -11,6 +11,7 @@
   --color-surface: rgb(17 29 33 / 84%);
   --color-surface-solid: #101b20;
   --color-sidebar: rgb(10 20 24 / 92%);
+  --color-sidebar-solid: rgb(10 20 24);
   --color-tabbar: rgb(11 21 25 / 76%);
   --color-hover: rgb(160 224 204 / 8%);
   --color-selected: rgb(92 240 190 / 10%);
@@ -75,6 +76,83 @@ agrid {
   --agrid-color-menu-bg: #101b20 !important;
   --agrid-color-danger: var(--color-danger) !important;
   --agrid-color-danger-subtle: #3e1c1c !important;
+}
+
+agrid-tree {
+  display: block;
+  min-width: 0;
+  width: 100%;
+  font-size: 1em;
+  --agrid-color-text: var(--color-foreground);
+  --agrid-color-text-muted: var(--color-muted);
+  --agrid-color-accent: var(--color-accent);
+  --agrid-color-accent-subtle: var(--color-selected);
+  --agrid-color-accent-fg: var(--color-accent-strong);
+  --agrid-color-border: var(--color-border);
+  --agrid-color-bg: var(--color-sidebar);
+  --agrid-color-bg-muted: var(--color-hover);
+  --agrid-tree-row-height: 34px;
+}
+
+agrid-tree .ag-tree {
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+}
+
+agrid-tree .ag-tree-node {
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  overflow: hidden;
+}
+
+agrid-tree .ag-tree-content {
+  flex: 1 1 0%;
+  min-width: 0;
+}
+
+agrid-tree .ag-tree-node.tree-node-active-connection {
+  color: var(--color-accent-strong);
+}
+
+agrid-tree .ag-tree-node.tree-node-active-page {
+  border-inline-start: 2px solid var(--color-accent);
+  background: var(--color-selected);
+  color: var(--color-accent-strong);
+}
+
+agrid-tree .ag-tree-node.tree-node-error {
+  color: var(--color-danger);
+}
+
+agrid-tree .ag-tree-description {
+  font-size: .8em;
+}
+
+agrid-tree .ag-tree-menu-item--danger {
+  border: 1px solid color-mix(in srgb, var(--color-danger) 30%, transparent);
+  background: var(--color-danger-bg);
+  color: var(--color-danger);
+}
+
+agrid-tree .ag-tree-menu-item--danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-danger) 20%, var(--color-surface-solid));
+}
+
+agrid-tree .ag-tree-menu,
+agrid-tree .ag-tree-confirm {
+  z-index: 10000;
+}
+
+.ag-tree-confirm-primary {
+  color: var(--color-accent-ink);
+}
+
+.ag-tree-confirm-primary--danger {
+  border-color: var(--color-danger);
+  background: var(--color-danger);
+  color: var(--color-accent-ink);
 }
 
 * { box-sizing: border-box; }

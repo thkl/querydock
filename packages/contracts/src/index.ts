@@ -14,9 +14,28 @@ export const postgresConnectRequestSchema = z.object({
 
 export type PostgresConnectRequest = z.infer<typeof postgresConnectRequestSchema>;
 
-export const connectionTargetSchema = postgresConnectRequestSchema
-  .pick({ adapter: true, host: true, port: true, database: true, username: true })
-  .strict();
+export const sqlServerConnectRequestSchema = z.object({
+  adapter: z.literal('sqlserver'),
+  host: z.string().trim().min(1).max(255),
+  port: z.number().int().min(1).max(65535),
+  database: z.string().trim().min(1).max(128),
+  username: z.string().trim().min(1).max(128),
+  password: z.string().max(1024),
+  encrypt: z.boolean().default(true),
+  trustServerCertificate: z.boolean().default(false),
+});
+
+export type SqlServerConnectRequest = z.infer<typeof sqlServerConnectRequestSchema>;
+export const databaseConnectRequestSchema = z.discriminatedUnion('adapter', [
+  postgresConnectRequestSchema,
+  sqlServerConnectRequestSchema,
+]);
+export type DatabaseConnectRequest = z.infer<typeof databaseConnectRequestSchema>;
+
+export const connectionTargetSchema = z.discriminatedUnion('adapter', [
+  postgresConnectRequestSchema.pick({ adapter: true, host: true, port: true, database: true, username: true }),
+  sqlServerConnectRequestSchema.pick({ adapter: true, host: true, port: true, database: true, username: true }),
+]);
 
 export type ConnectionTarget = z.infer<typeof connectionTargetSchema>;
 
@@ -120,6 +139,7 @@ export const tableSnapshotSchema = z.object({
   schema: z.string(),
   name: z.string(),
   kind: resourceDescriptorSchema.shape.kind,
+  definitionSql: z.string().nullable().optional(),
   canAlter: z.boolean(),
   fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
   editableFieldTypes: z.array(editableFieldTypeDescriptorSchema),

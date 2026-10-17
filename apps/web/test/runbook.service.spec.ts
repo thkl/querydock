@@ -37,7 +37,10 @@ function createHarness() {
       snapshots: [],
     })),
     inspectTable: vi.fn(async () => { throw new Error('Unexpected table inspection.'); }),
-    refreshResources: vi.fn(async () => undefined),
+    refreshResources: vi.fn(async () => [
+      { schema: 'public', name: 'customers' },
+      { schema: 'public', name: 'invoices' },
+    ]),
   };
   const injector = Injector.create({ providers: [
     { provide: ConnectionApiService, useValue: connections },

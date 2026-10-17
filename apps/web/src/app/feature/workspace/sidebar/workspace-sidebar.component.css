@@ -2,9 +2,12 @@
     display: block;
     height: 100%;
     min-height: 0;
+    position: relative;
+    z-index: 3;
 }
 
 .sidebar {
+    isolation: isolate;
     position: relative;
     display: flex;
     width: 100%;
@@ -14,8 +17,17 @@
     flex-direction: column;
     overflow: hidden;
     border-right: 1px solid var(--color-border);
+    background: transparent;
+}
+
+.sidebar::before {
+    position: absolute;
+    z-index: -1;
     background: var(--color-sidebar);
     backdrop-filter: blur(18px);
+    content: '';
+    inset: 0;
+    pointer-events: none;
 }
 
 .sidebar-actions {
@@ -233,6 +245,22 @@
     scrollbar-width: thin;
 }
 
+.database-tree {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    color: var(--color-foreground);
+    --agrid-color-text: var(--color-foreground);
+    --agrid-color-text-muted: var(--color-muted);
+    --agrid-color-accent: var(--color-accent);
+    --agrid-color-accent-subtle: var(--color-selected);
+    --agrid-color-accent-fg: var(--color-accent-strong);
+    --agrid-color-border: var(--color-border);
+    --agrid-color-bg: var(--color-sidebar-solid);
+    --agrid-color-bg-muted: var(--color-hover);
+    --agrid-tree-row-height: 34px;
+}
+
 .empty-resources {
     margin: 10px 12px 0 0;
     color: var(--color-muted);
@@ -310,6 +338,17 @@
     margin-left: auto;
 }
 
+.resource-kind-heading {
+    height: 24px;
+    padding: 7px 11px 0 25px;
+    color: var(--color-muted);
+    font-size: .75em;
+    font-weight: 700;
+    letter-spacing: .08em;
+    line-height: 17px;
+    text-transform: uppercase;
+}
+
 .schema-row:hover .schema-add-table,
 .schema-add-table:focus-visible {
     border-color: var(--color-border);
@@ -322,6 +361,10 @@
     width: 13px;
     color: var(--color-muted-light);
     font-size: 1em;
+}
+
+.view-icon {
+    color: var(--color-accent-strong);
 }
 
 .relationship-tree-row {

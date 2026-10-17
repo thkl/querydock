@@ -13,89 +13,18 @@
   <div class="sidebar-section-heading">
     <span>CONNECTIONS</span>
     <button class="tiny-icon-button mobile-tree-toggle" type="button" [attr.aria-expanded]="mobileTreeOpen()" aria-label="Toggle database navigation" title="Browse connections, schemas, and tables" (click)="toggleMobileTree()">☷</button>
-    <button class="tiny-icon-button" type="button" aria-label="Add connection" title="Connect to PostgreSQL" (click)="connections.openConnectDialog()">+</button>
+    <button class="tiny-icon-button" type="button" aria-label="Add connection" title="Connect to a database" (click)="connections.openConnectDialog()">+</button>
   </div>
-  @if (connections.disconnectError()) {
-    <p class="connection-error" role="alert">Could not disconnect: {{ connections.disconnectError() }}</p>
-  }
   <div class="resource-tree scrollbar">
-    @for (connection of connections.connections(); track connection.connectionId) {
-      <div class="connection-entry" [class.selected]="connections.activeConnectionId() === connection.connectionId">
-        <button
-          class="connection-item"
-          [class.selected]="connections.activeConnectionId() === connection.connectionId"
-          type="button"
-          (click)="connections.selectConnection(connection.connectionId); closeMobileTree()"
-          [title]="connectionLabel(connection.connectionId)"
-        >
-          <span class="database-icon">◉</span>
-          <span class="connection-labels"><strong>{{ connectionLabel(connection.connectionId) }}</strong><small>{{ connection.target.host }}:{{ connection.target.port }} · {{ connection.target.username }}</small></span>
-          <span class="online-indicator" aria-label="Connected"></span>
-        </button>
-        @if (disconnectConfirmationId() === connection.connectionId) {
-          <div class="disconnect-confirmation" role="group" [attr.aria-label]="'Confirm disconnect ' + connectionLabel(connection.connectionId)">
-            <span>Close this session’s tabs? Unsubmitted table drafts will be discarded; Runbook changes remain.</span>
-            <button type="button" [disabled]="connections.disconnectingId() === connection.connectionId" (click)="disconnect(connection.connectionId)">
-              @if (connections.disconnectingId() === connection.connectionId) { Disconnecting… } @else { Disconnect }
-            </button>
-            <button type="button" (click)="disconnectConfirmationId.set(null)">Cancel</button>
-          </div>
-        } @else {
-          <button
-            class="disconnect-button"
-            type="button"
-            [disabled]="connections.disconnectingId() === connection.connectionId"
-            [attr.aria-label]="'Disconnect ' + connectionLabel(connection.connectionId)"
-            title="Disconnect"
-            (click)="disconnectConfirmationId.set(connection.connectionId)"
-          >×</button>
-        }
-        @if (connections.activeConnectionId() === connection.connectionId) {
-          <div class="connection-tree">
-            @if (connections.resourceErrorsByConnection().get(connection.connectionId); as resourceError) {
-              <p class="empty-resources resource-error" role="alert">Resource discovery failed: {{ resourceError }}</p>
-            }
-            @for (group of connections.resourceGroups(); track group.schema) {
-              <div class="tree-row schema-row" [title]="group.schema">
-                <span class="tree-caret">⌄</span><span class="schema-icon">▱</span><span>{{ group.schema }}</span>
-                @if (group.canCreateTable) {
-                  <button class="schema-add-table" type="button" [attr.aria-label]="'Create table in ' + group.schema" [title]="'Create table in ' + group.schema" (click)="pages.openCreateTable(group.schema); closeMobileTree()">＋</button>
-                } @else {
-                 <span class="schema-readonly"></span>
-                }
-              </div>
-              @for (resource of group.resources; track resource.schema + '.' + resource.name) {
-                <div class="tree-row table-row table-row-grid">
-                  <span class="table-icon" aria-hidden="true">▦</span>
-                  <button
-                  class="tree-row table-row"
-                  [class.selected]="pages.isActiveTable(connection.connectionId, resource.schema, resource.name)"
-                  type="button"
-                  [title]="resource.schema + '.' + resource.name"
-                  [attr.aria-current]="pages.isActiveTable(connection.connectionId, resource.schema, resource.name) ? 'page' : null"
-                  (click)="openResourceSchema(resource.schema, resource.name)"
-                ><span>{{ resource.name }}</span></button>
-                <button class="button-schema-icon" (click)="openResourceSchema(resource.schema, resource.name)" aria-label="Open table structure" title="Open table structure"><svg xmlns="http://www.w3.org/2000/svg" height="15px" fill="var(--color-muted-light)" viewBox="48 -912 864 864" width="15px"><path d="M192-72v-216h96v-84h-96v-216h96v-60h-96v-216h264v216h-96v60h96v72h96v-72h264v216H552v-72h-96v72h-96v84h96v216H192Zm72-72h120v-72H264v72Zm0-300h120v-72H264v72Zm360 0h120v-72H624v72ZM264-720h120v-72H264v72Zm60-36Zm0 276Zm360 0ZM324-180Z"/></svg></button>
-               @if (connections.activeConnection()?.capabilities?.browseData) {
-                  <button class="button-browse-icon" (click)="openDataView(resource.schema, resource.name)" aria-label="Browse table data" title="Browse table data"><svg xmlns="http://www.w3.org/2000/svg" height="15px" fill="var(--color-muted-light)" viewBox="48 -912 864 864" width="15px"><path d="M288-288h144v-144H288v144Zm240 0h144v-144H528v144ZM288-528h144v-144H288v144Zm240 0h144v-144H528v144ZM216-144q-29.7 0-50.85-21.15Q144-186.3 144-216v-528q0-29.7 21.15-50.85Q186.3-816 216-816h528q29.7 0 50.85 21.15Q816-773.7 816-744v528q0 29.7-21.15 50.85Q773.7-144 744-144H216Zm0-72h528v-528H216v528Zm0-528v528-528Z"/></svg></button>
-               }
-              </div>
-              }
-            }
-            <a class="tree-row relationship-tree-row" routerLink="/relationships" routerLinkActive="selected" ariaCurrentWhenActive="page"
-              (click)="pages.prepareRelationshipDiagram(connection.connectionId); closeMobileTree()">
-              <span class="table-icon" aria-hidden="true">⌘</span><span>Relationships</span>
-            </a>
-            @if (!connections.activeResources().length && !connections.resourceErrorsByConnection().get(connection.connectionId)) {
-              <p class="empty-resources">No visible tables or views.</p>
-            }
-          </div>
-        }
-      </div>
+    @if (connections.disconnectError()) {
+      <p class="connection-error" role="alert">Could not disconnect: {{ connections.disconnectError() }}</p>
     }
-    @if (!connections.connections().length) {
-      <p class="empty-resources">Connect to PostgreSQL to inspect schemas and tables.</p>
-    }
+    <agrid-tree
+      class="database-tree"
+      [provider]="treeProvider()"
+      (nodeClick)="onTreeNodeClick($event)"
+      (nodeMenuAction)="onTreeMenuAction($event)"
+    />
   </div>
   <div class="sidebar-bottom">
     <div class="sidebar-footer"><span class="kbd">⌘ K</span><span>Quick actions</span></div>

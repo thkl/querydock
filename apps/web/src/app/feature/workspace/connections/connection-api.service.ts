@@ -9,7 +9,7 @@ import type {
   ConnectResponse,
   EditableFieldTypeDescriptor,
   ForeignKeyFieldChoices,
-  PostgresConnectRequest,
+  DatabaseConnectRequest,
   ResourceDescriptor,
   TableSnapshot,
   TableDataQueryRequest,
@@ -52,7 +52,18 @@ export class ConnectionApiService {
     }
     return [...groups].map(([schema, resources]) => ({
       schema,
-      resources,
+      categories: [
+        {
+          kind: 'tables' as const,
+          label: 'Tables',
+          resources: resources.filter(({ kind }) => ['table', 'partitionedTable', 'foreignTable'].includes(kind)),
+        },
+        {
+          kind: 'views' as const,
+          label: 'Views',
+          resources: resources.filter(({ kind }) => ['view', 'materializedView'].includes(kind)),
+        },
+      ].filter(({ resources: categoryResources }) => categoryResources.length > 0),
       canCreateTable: resources.some(({ canCreateTable }) => canCreateTable),
     }));
   });
@@ -85,7 +96,7 @@ export class ConnectionApiService {
   }
 
   /** Creates a server session connection, activates it, and loads its visible resources. */
-  async connect(configuration: PostgresConnectRequest, closeOnSuccess = true): Promise<boolean> {
+  async connect(configuration: DatabaseConnectRequest, closeOnSuccess = true): Promise<boolean> {
     this.connectError.set(null);
     this.connecting.set(true);
     try {

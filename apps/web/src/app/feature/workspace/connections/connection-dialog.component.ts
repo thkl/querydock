@@ -1,5 +1,5 @@
 import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
-import type { PostgresConnectRequest } from '@querydock/contracts';
+import type { DatabaseConnectRequest } from '@querydock/contracts';
 import { ConnectionApiService } from './connection-api.service';
 import { ConnectionVaultService, type SavedConnectionProfile } from './connection-vault.service';
 
@@ -16,7 +16,8 @@ export class ConnectionDialogComponent {
   readonly vaultSetupOpen = signal(false);
   readonly saveToVault = signal(false);
   readonly vaultMessage = signal<string | null>(null);
-  readonly pendingVaultSave = signal<{ configuration: PostgresConnectRequest; name: string } | null>(null);
+  readonly pendingVaultSave = signal<{ configuration: DatabaseConnectRequest; name: string } | null>(null);
+  readonly selectedAdapter = signal<'postgresql' | 'sqlserver'>('postgresql');
   readonly resetVaultArmed = signal(false);
   readonly forgettingProfileId = signal<string | null>(null);
   readonly editingProfileId = signal<string | null>(null);
@@ -79,15 +80,25 @@ export class ConnectionDialogComponent {
     const form = event.currentTarget;
     if (!(form instanceof HTMLFormElement)) return;
     const values = new FormData(form);
-    const configuration: PostgresConnectRequest = {
-      adapter: 'postgresql',
+    const common = {
       host: String(values.get('host') ?? '').trim(),
       port: Number(values.get('port')),
       database: String(values.get('database') ?? '').trim(),
       username: String(values.get('username') ?? '').trim(),
       password: String(values.get('password') ?? ''),
-      sslMode: String(values.get('sslMode') ?? 'require') as PostgresConnectRequest['sslMode'],
     };
+    const configuration: DatabaseConnectRequest = this.selectedAdapter() === 'sqlserver'
+      ? {
+        adapter: 'sqlserver',
+        ...common,
+        encrypt: values.get('encrypt') === 'on',
+        trustServerCertificate: values.get('trustServerCertificate') === 'on',
+      }
+      : {
+        adapter: 'postgresql',
+        ...common,
+        sslMode: String(values.get('sslMode') ?? 'require') as 'disable' | 'require' | 'verify-full',
+      };
     const saveInVault = values.get('saveInVault') === 'on';
     const profileName = String(values.get('connectionName') ?? '').trim();
     const connected = await this.state.connect(configuration, !saveInVault);
@@ -110,6 +121,11 @@ export class ConnectionDialogComponent {
   /** Mirrors the save-to-vault checkbox into the form signal. */
   updateSaveToVault(event: Event): void {
     this.saveToVault.set((event.currentTarget as HTMLInputElement).checked);
+  }
+
+  /** Selects a database engine for the connection form. */
+  updateAdapter(event: Event): void {
+    this.selectedAdapter.set((event.currentTarget as HTMLSelectElement).value as 'postgresql' | 'sqlserver');
   }
 
   /** Retries saving credentials after a successful connection but failed vault write. */
@@ -186,5 +202,14 @@ export class ConnectionDialogComponent {
     if (profile.name.trim()) return profile.name.trim();
     const { configuration } = profile;
     return `${configuration.database} · ${configuration.host}:${configuration.port} · ${configuration.username}`;
+  }
+
+  /** Formats adapter-specific transport options for a saved profile. */
+  profileDetails(profile: SavedConnectionProfile): string {
+    const { configuration } = profile;
+    const transport = configuration.adapter === 'postgresql'
+      ? configuration.sslMode
+      : configuration.encrypt ? 'TLS encrypted' : 'TLS disabled';
+    return `${configuration.database} · ${configuration.host}:${configuration.port} · ${configuration.username} · ${transport}`;
   }
 }

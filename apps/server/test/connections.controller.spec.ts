@@ -12,6 +12,7 @@ import type { ConnectResponse, PostgresConnectRequest } from '@querydock/contrac
 import { ConnectionSessionsService } from '../src/feature/connections/connection-sessions.service.ts';
 import { ConnectionsController } from '../src/feature/connections/connections.controller.ts';
 import { MigrationPlanError, PostgresAdapter, PostgresConnectionError } from '../src/feature/postgres/postgres.adapter.ts';
+import { SqlServerAdapter } from '../src/feature/sqlserver/sqlserver.adapter.ts';
 
 const configuration: PostgresConnectRequest = {
   adapter: 'postgresql', host: 'localhost', port: 5432, database: 'querydock_test', username: 'tester',
@@ -63,6 +64,7 @@ describe('ConnectionsController', () => {
   let controller: ConnectionsController;
   let sessions: Record<string, ReturnType<typeof vi.fn>>;
   let postgres: Record<string, ReturnType<typeof vi.fn>>;
+  let sqlserver: Record<string, ReturnType<typeof vi.fn>>;
 
   beforeEach(() => {
     sessions = {
@@ -83,9 +85,24 @@ describe('ConnectionsController', () => {
       previewSchemaFieldDraft: vi.fn().mockResolvedValue({ baselineFingerprint: 'a'.repeat(64), statements: [], warnings: [], operations: [] }),
       applyMigration: vi.fn().mockResolvedValue({ appliedStatements: ['ALTER TABLE'], snapshots: [] }),
     };
+    sqlserver = {
+      verifyConnection: vi.fn().mockResolvedValue({ serverVersion: '16.0' }),
+      schemaCapabilities: vi.fn().mockReturnValue({ createTableIfNotExists: false }),
+      listResources: vi.fn().mockResolvedValue([{ schema: 'dbo', name: 'customers', kind: 'table', isUpdatable: true, canCreateTable: false }]),
+      editableFieldTypes: vi.fn().mockReturnValue([]),
+      inspectTable: vi.fn().mockResolvedValue({ schema: 'dbo', name: 'customers' }),
+      queryTableData: vi.fn().mockResolvedValue({ columns: [], rows: [], totalRows: 0 }),
+      updateTableDataRow: vi.fn(),
+      insertTableDataRow: vi.fn(),
+      deleteTableDataRow: vi.fn(),
+      previewDataRunbook: vi.fn().mockResolvedValue({ snapshot: {}, preview: {} }),
+      previewMigration: vi.fn().mockResolvedValue({ baselineFingerprint: 'a'.repeat(64), statements: [], warnings: [] }),
+      applyMigration: vi.fn().mockResolvedValue({ appliedStatements: [], snapshots: [] }),
+    };
     controller = new ConnectionsController(
       sessions as unknown as ConnectionSessionsService,
       postgres as unknown as PostgresAdapter,
+      sqlserver as unknown as SqlServerAdapter,
     );
   });
 
@@ -97,6 +114,29 @@ describe('ConnectionsController', () => {
       capabilities: expect.objectContaining({ browseData: true, mutateData: true, executeSql: false }),
     }));
     expect(result).toEqual(connection);
+  });
+
+  it('connects SQL Server profiles with its own driver and capability set', async () => {
+    const sqlServerConfig = {
+      adapter: 'sqlserver', host: 'localhost', port: 1433, database: 'querydock_test',
+      username: 'tester', password: 'secret', encrypt: true, trustServerCertificate: false,
+    } as const;
+    await controller.connect(sqlServerConfig, request(), response());
+    expect(sqlserver.verifyConnection).toHaveBeenCalledWith(sqlServerConfig);
+    expect(sessions.addConnection).toHaveBeenCalledWith(expect.anything(), expect.anything(), sqlServerConfig, expect.objectContaining({
+      serverVersion: '16.0',
+      capabilities: expect.objectContaining({ browseData: true, mutateData: true, editSchema: false }),
+    }));
+  });
+
+  it('dispatches resource discovery according to the selected database adapter', async () => {
+    sessions.requireConnection.mockReturnValueOnce({
+      adapter: 'sqlserver', host: 'localhost', port: 1433, database: 'querydock_test',
+      username: 'tester', password: 'secret', encrypt: true, trustServerCertificate: false,
+    });
+    await expect(controller.listResources(connectionId, request(), response())).resolves.toMatchObject([{ schema: 'dbo' }]);
+    expect(sqlserver.listResources).toHaveBeenCalledOnce();
+    expect(postgres.listResources).not.toHaveBeenCalled();
   });
 
   it('rejects invalid connection bodies and converts PostgreSQL connection failures to safe gateway errors', async () => {

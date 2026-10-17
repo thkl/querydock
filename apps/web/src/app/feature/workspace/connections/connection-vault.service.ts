@@ -1,6 +1,6 @@
 import { Injectable, signal } from '@angular/core';
-import type { PostgresConnectRequest } from '@querydock/contracts';
-import { postgresConnectRequestSchema } from '@querydock/contracts';
+import type { DatabaseConnectRequest } from '@querydock/contracts';
+import { databaseConnectRequestSchema } from '@querydock/contracts';
 
 const DATABASE_NAME = 'querydock-connection-vault';
 const STORE_NAME = 'encrypted-records';
@@ -30,7 +30,7 @@ interface EncryptedProfileRecord {
 }
 
 interface ProfilePayload {
-  configuration: PostgresConnectRequest;
+  configuration: DatabaseConnectRequest;
   name?: string;
   createdAt: number;
 }
@@ -38,7 +38,7 @@ interface ProfilePayload {
 export interface SavedConnectionProfile {
   id: string;
   name: string;
-  configuration: PostgresConnectRequest;
+  configuration: DatabaseConnectRequest;
   createdAt: number;
   updatedAt: number;
 }
@@ -108,7 +108,7 @@ export class ConnectionVaultService {
   }
 
   /** Encrypts a saved database profile, updating an existing matching target by name. */
-  async save(configuration: PostgresConnectRequest, name?: string): Promise<void> {
+  async save(configuration: DatabaseConnectRequest, name?: string): Promise<void> {
     const key = this.requireUnlockedKey();
     const existing = this.profiles().find(({ configuration: saved }) => sameTarget(saved, configuration));
     const id = existing?.id ?? crypto.randomUUID();
@@ -193,7 +193,7 @@ export class ConnectionVaultService {
         `profile:${id}:v1`,
       );
       const payload = JSON.parse(plaintext) as ProfilePayload;
-      const parsed = postgresConnectRequestSchema.safeParse(payload.configuration);
+      const parsed = databaseConnectRequestSchema.safeParse(payload.configuration);
       if (!parsed.success || !Number.isFinite(payload.createdAt)) throw new Error('A saved connection profile is invalid.');
       profiles.push({
         id,
@@ -359,9 +359,13 @@ function decodeBase64(value: string): Uint8Array<ArrayBuffer> {
 }
 
 /** Identifies a saved profile by its complete database target and TLS mode. */
-function sameTarget(left: PostgresConnectRequest, right: PostgresConnectRequest): boolean {
-  return left.adapter === right.adapter && left.host === right.host && left.port === right.port
-    && left.database === right.database && left.username === right.username && left.sslMode === right.sslMode;
+function sameTarget(left: DatabaseConnectRequest, right: DatabaseConnectRequest): boolean {
+  if (left.adapter !== right.adapter || left.host !== right.host || left.port !== right.port
+    || left.database !== right.database || left.username !== right.username) return false;
+  return left.adapter === 'postgresql' && right.adapter === 'postgresql'
+    ? left.sslMode === right.sslMode
+    : left.adapter === 'sqlserver' && right.adapter === 'sqlserver'
+      && left.encrypt === right.encrypt && left.trustServerCertificate === right.trustServerCertificate;
 }
 
 /** Validates vault metadata shape and encoded cryptographic value lengths. */

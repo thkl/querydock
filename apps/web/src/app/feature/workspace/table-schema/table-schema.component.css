@@ -249,6 +249,37 @@ h1 {
   height: 60%;
 }
 
+.view-definition-card {
+  min-height: 180px;
+}
+
+.view-definition-sql {
+  max-height: min(52vh, 620px);
+  overflow: auto;
+  margin: 0;
+  padding: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-background-raised);
+  color: var(--color-foreground);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: .92em;
+  line-height: 1.55;
+  white-space: pre;
+}
+
+.view-definition-sql code {
+  color: inherit;
+  font: inherit;
+}
+
+.view-definition-unavailable {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: .95em;
+  line-height: 1.55;
+}
+
 .constraints-card {
   height: 30%
 }

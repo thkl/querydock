@@ -2,9 +2,9 @@
   @if (!connections.activeConnection()) {
   <div class="schema-state">
     <div class="placeholder-icon schema-placeholder-icon" aria-hidden="true">☷</div>
-    <p class="eyebrow">TABLE STRUCTURE</p>
+    <p class="eyebrow">TABLE OR VIEW</p>
     <h1>Connect to inspect a table</h1>
-    <p>Connect to a PostgreSQL database to load its visible fields and constraints.</p>
+    <p>Connect to a database to load its visible fields and view definitions.</p>
     <button class="subtle-button" type="button" (click)="connections.openConnectDialog()">Add connection</button>
   </div>
   } @else if (loading()) {
@@ -23,7 +23,7 @@
   } @else if (snapshot(); as table) {
   <header class="page-heading">
     <div>
-      <p class="eyebrow">TABLE STRUCTURE <span class="separator">/</span> {{ table.schema }}</p>
+      <p class="eyebrow">{{ table.kind === 'view' ? 'VIEW DEFINITION' : 'TABLE STRUCTURE' }} <span class="separator">/</span> {{ table.schema }}</p>
       @if (renamingTable()) {
       <div class="table-title-editor">
         <input #tableRenameInput id="table-rename-input" class="table-title-input" [value]="tableNameDraft()"
@@ -53,7 +53,7 @@
       </div>
       }
       <p class="page-description">Current metadata from {{ connections.activeConnection()?.target.database }} ·
-        PostgreSQL</p>
+        {{ connections.activeConnection()?.target?.adapter === 'sqlserver' ? 'Microsoft SQL Server' : 'PostgreSQL' }}</p>
     </div>
     <div class="schema-heading-actions">
       @if (connections.activeConnection()?.capabilities?.browseData) {
@@ -122,6 +122,22 @@
     }
   </section>
 
+  @if (table.kind === 'view') {
+  <section class="structure-card view-definition-card" aria-labelledby="view-definition-title">
+    <header class="card-heading">
+      <div>
+        <h2 id="view-definition-title">View definition</h2>
+        <p>SQL used to define {{ table.schema }}.{{ table.name }}</p>
+      </div>
+      <span class="metadata-label">READ ONLY</span>
+    </header>
+    @if (table.definitionSql) {
+    <pre class="view-definition-sql"><code>{{ table.definitionSql }}</code></pre>
+    } @else {
+    <p class="view-definition-unavailable">SQL Server returned no definition for this view. The connected database user needs <code>VIEW DEFINITION</code> on this view. If that permission is already granted, the view may have been created with <code>WITH ENCRYPTION</code>.</p>
+    }
+  </section>
+  } @else {
   <section class="structure-card constraints-card" aria-labelledby="constraints-title">
     <header class="card-heading">
       <div>
@@ -293,12 +309,13 @@
       }
     </div>
   </section>
+  }
 
   <footer class="schema-footer">
     @if (table.canAlter) {
     <span><span class="status-dot"></span> Schema drafts stay in the runbook until you apply them</span>
     } @else {
-    <span><span class="status-dot"></span> Read only · this database role cannot alter the table</span>
+    <span><span class="status-dot"></span> Read only · this database role cannot alter this resource</span>
     }
     <code title="Baseline fingerprint">{{ table.fingerprint.slice(0, 12) }}</code>
   </footer>

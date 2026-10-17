@@ -41,6 +41,7 @@ describe('ConnectionApiService API surface', () => {
       if (url === '/api/connections') return jsonResponse([connection]);
       if (url.endsWith('/resources')) return jsonResponse([
         { schema: 'public', name: 'people', kind: 'table', isUpdatable: true, canCreateTable: true },
+        { schema: 'public', name: 'active_people', kind: 'view', isUpdatable: false, canCreateTable: true },
         { schema: 'audit', name: 'events', kind: 'table', isUpdatable: false, canCreateTable: false },
       ]);
       return jsonResponse({ message: 'unexpected request' }, 500);
@@ -50,10 +51,19 @@ describe('ConnectionApiService API surface', () => {
     await vi.waitFor(() => expect(service.sessionRestoreComplete()).toBe(true));
 
     expect(service.activeConnection()).toEqual(connection);
-    expect(service.activeResources()).toHaveLength(2);
+    expect(service.activeResources()).toHaveLength(3);
     expect(service.resourceGroups()).toEqual([
-      { schema: 'public', canCreateTable: true, resources: [expect.objectContaining({ name: 'people' })] },
-      { schema: 'audit', canCreateTable: false, resources: [expect.objectContaining({ name: 'events' })] },
+      {
+        schema: 'public', canCreateTable: true, categories: [
+          { kind: 'tables', label: 'Tables', resources: [expect.objectContaining({ name: 'people' })] },
+          { kind: 'views', label: 'Views', resources: [expect.objectContaining({ name: 'active_people' })] },
+        ],
+      },
+      {
+        schema: 'audit', canCreateTable: false, categories: [
+          { kind: 'tables', label: 'Tables', resources: [expect.objectContaining({ name: 'events' })] },
+        ],
+      },
     ]);
     expect(fetchMock).toHaveBeenCalledWith('/api/connections', expect.objectContaining({ credentials: 'same-origin' }));
   });
@@ -136,7 +146,7 @@ describe('ConnectionApiService API surface', () => {
       if (String(input) === '/api/connections') return jsonResponse([]);
       return jsonResponse({
         columns: [{ ordinalPosition: 1, name: 'id', dataType: 'integer', nullable: false, editable: false, insertable: true }],
-        rows: [{ id: '1' }], keyFields: ['id'], rowVersions: ['1'], canUpdateRows: true, canInsertRows: true, totalRows: 1,
+        rows: [{ id: '1' }], keyFields: ['id'], rowVersions: ['1'], canUpdateRows: true, canInsertRows: true, canDeleteRows: true, totalRows: 1,
       });
     });
     vi.stubGlobal('fetch', fetchMock);

@@ -9,14 +9,14 @@ import {
 } from '@nestjs/common';
 import { randomBytes, randomUUID } from 'node:crypto';
 import type { Request, Response } from 'express';
-import type { ConnectResponse, PostgresConnectRequest } from '@querydock/contracts';
+import type { ConnectResponse, DatabaseConnectRequest } from '@querydock/contracts';
 
 const SESSION_COOKIE = 'qd_session';
 const SESSION_TTL_MS = 30 * 60 * 1000;
 const MAX_CONNECTIONS_PER_SESSION = 12;
 
 interface SessionConnection {
-  configuration: PostgresConnectRequest;
+  configuration: DatabaseConnectRequest;
   summary: ConnectResponse;
 }
 
@@ -46,7 +46,7 @@ export class ConnectionSessionsService implements OnModuleInit, OnModuleDestroy 
   addConnection(
     request: Request,
     response: Response,
-    configuration: PostgresConnectRequest,
+    configuration: DatabaseConnectRequest,
     summary: Omit<ConnectResponse, 'connectionId'>,
   ): ConnectResponse {
     this.removeExpiredSessions();
@@ -83,7 +83,7 @@ export class ConnectionSessionsService implements OnModuleInit, OnModuleDestroy 
     request: Request,
     response: Response,
     connectionId: string,
-  ): PostgresConnectRequest {
+  ): DatabaseConnectRequest {
     const sessionId = this.sessionIdFromRequest(request);
     const session = sessionId ? this.sessions.get(sessionId) : undefined;
     if (!session || session.expiresAt <= Date.now()) {

@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import { Logger } from '@nestjs/common';
 import { Client } from 'pg';
+import { MigrationPlanError } from '../database/database-errors.js';
+export { MigrationPlanError } from '../database/database-errors.js';
 import type {
   CreateTableField,
   MigrationApplyRequest,
@@ -36,6 +38,7 @@ interface ResourceRow {
 
 interface InspectedResourceRow extends Omit<ResourceRow, 'canCreateTable'> {
   canAlter: boolean;
+  viewDefinition: string | null;
 }
 
 interface FieldRow {
@@ -119,17 +122,6 @@ export class PostgresConnectionError extends Error {
   ) {
     super(message);
     this.name = 'PostgresConnectionError';
-  }
-}
-
-export class MigrationPlanError extends Error {
-  /** Creates a classified migration failure for consistent controller status mapping. */
-  constructor(
-    readonly kind: 'not-found' | 'drift' | 'review-mismatch' | 'invalid' | 'unknown',
-    message: string,
-  ) {
-    super(message);
-    this.name = 'MigrationPlanError';
   }
 }
 
@@ -705,6 +697,7 @@ export class PostgresAdapter {
         (relation.relkind IN ('r', 'p')
           AND pg_catalog.pg_has_role(current_user, relation.relowner, 'USAGE')
           AND pg_catalog.has_schema_privilege(current_user, namespace.oid, 'USAGE')) AS "canAlter",
+        CASE WHEN relation.relkind = 'v' THEN pg_catalog.pg_get_viewdef(relation.oid, true) END AS "viewDefinition",
         COALESCE(information_table.is_insertable_into = 'YES', false) AS "isUpdatable"
       FROM pg_catalog.pg_class AS relation
       JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid = relation.relnamespace
@@ -800,6 +793,9 @@ export class PostgresAdapter {
       schema: resource.schema,
       name: resource.name,
       kind: resource.kind,
+      definitionSql: resource.kind === 'view' && resource.viewDefinition
+        ? `CREATE OR REPLACE VIEW ${quoteIdentifier(resource.schema)}.${quoteIdentifier(resource.name)} AS\n${resource.viewDefinition};`
+        : null,
       fields,
       constraints,
     };

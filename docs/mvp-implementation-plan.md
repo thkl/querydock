@@ -1,6 +1,6 @@
 # QueryDock — MVP Implementation Plan
 
-Status: in progress. Milestone B connection and inspection are implemented. The user-confirmed Milestone C flow connects, inspects a table, stages a field change, previews and applies it, verifies it in the database, and exports SQL. Milestone D is underway: supported existing fields, table create/rename/drop, and primary-key, unique, foreign-key, and CHECK constraints are available through adapter-generated runbooks. The selected-operation integration matrix and manual acceptance walkthrough remain before Milestone D sign-off; data browsing is planned for Milestone E.
+Status: Milestones B, C, and D are complete by user sign-off. Milestone E is in progress. It includes the relationship diagram, connection workflow improvements, and PostgreSQL data browsing/editing. A first SQL Server adapter now supports connection, discovery, inspection, and data workflows; SQL Server schema editing and cross-table schema dependency planning remain outstanding.
 Date: 2026-10-13.
 
 References:
@@ -152,6 +152,8 @@ Use the [Milestone E completion checklist](milestone-e-completion-checklist.md) 
 - Inline syntax help and examples for CHECK constraint expressions.
 - A visual foreign-key editor in the relationship diagram that guides users to compatible target tables and key fields.
 - A second, materially different SQL Server adapter in Milestone E to test that the client depends on shared contracts and declared capabilities rather than PostgreSQL-specific behavior. Both adapters should support the same workflows where their capabilities allow it; genuine engine differences must be reported through adapter contracts and UI capability handling.
+- SQL Server v1 supports secure connection setup, resource discovery, table/view inspection, bounded search/sort/filter/paging, safe row identity, concurrency-checked direct row changes, and adapter-generated data Runbook preview/Apply. Schema editing and foreign-key editing are explicitly unavailable for SQL Server until its DDL planner is implemented.
+- [x] SQL Server navigation separates tables from views, and a view page displays its adapter-provided CREATE/view definition SQL when the connected database principal has metadata permission.
 
 ### Candidate scope (to confirm)
 
@@ -176,7 +178,7 @@ Use the [Milestone E completion checklist](milestone-e-completion-checklist.md) 
 - Adding a primary key presents the available table fields for selection, supports the adapter's valid key shape, and stages the chosen fields in the runbook.
 - Adding a CHECK constraint explains the expected expression syntax with relevant examples; server-side validation errors identify how to correct invalid expressions.
 - Foreign-key editing shows target primary/unique key sets reported by the adapter, marks compatible choices, explains field-count/type mismatches, and stages only compatible references.
-- PostgreSQL and SQL Server can each connect, discover resources, inspect schemas, browse data, and use the shared client workflows for operations supported by their declared capabilities. Engine-specific SQL, identifiers, types, permissions, and unsupported operations remain adapter-owned and do not leak PostgreSQL assumptions into the client.
+- PostgreSQL and SQL Server can each connect, discover resources, inspect schemas, and browse data. SQL Server data row insert/update/delete and data Runbook workflows use SQL Server-generated queries; schema and relationship editing are capability-disabled for that adapter. Engine-specific SQL, identifiers, types, permissions, and unsupported operations remain adapter-owned and do not leak PostgreSQL assumptions into the client.
 
 Confirm keyless-table behavior and precise concurrency rules before implementing writes; initially read-only is the recommended fallback.
 

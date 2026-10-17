@@ -23,7 +23,7 @@ Users change their development database and export a migration file. Their appli
 - Backend: NestJS and TypeScript.
 - Shared contracts: Zod schemas for requests, responses, descriptors, and runtime validation.
 - SQL editor: CodeMirror 6 for query tabs and runbook SQL previews, styled to match the workbench. Start with SQL highlighting and editing shortcuts; schema-aware autocomplete can follow.
-- Database access: native database drivers inside adapters, starting with `pg` for PostgreSQL. Do not use an ORM for database access or schema management. Adapters directly control introspection, parameterized data queries, transactions, and migration SQL.
+- Database access: native database drivers inside adapters, using `pg` for PostgreSQL and `mssql` (Tedious) for Microsoft SQL Server. Do not use an ORM for database access or schema management. Adapters directly control introspection, parameterized data queries, transactions, and migration SQL.
 - Repository: pnpm workspaces monorepo. Start without Nx; reconsider it if repository growth warrants additional task/dependency tooling.
 - Layout: `apps/web` for Angular, `apps/server` for NestJS, and `packages/contracts` for shared Zod schemas and types.
 - Dependency policy: minimize additional dependencies to reduce ongoing update and maintenance work. Add a library only when its benefit justifies its maintenance cost; prefer platform/framework APIs for small, bounded needs. This does not require rebuilding complex components already selected, such as the SQL editor.
@@ -54,6 +54,8 @@ Adapters own:
 - Validation and interpretation of schema changes.
 - Identifier quoting, dialect-specific SQL, and dependency ordering.
 - SQL query execution and transactional runbook application.
+
+The SQL Server adapter currently supports connection, resource discovery, schema inspection, bounded data browsing, and guarded row insert/update/delete operations, including data Runbook preview and Apply. Schema and relationship editing remain PostgreSQL-only until SQL Server dialect generation and dependency handling are implemented; the connection advertises this through `editSchema: false`.
 
 Keep capabilities, type/editor descriptors, and current resource metadata distinct. Fetch capabilities per connection because engine version, extensions, and permissions affect behavior. Preserve engine-specific information through extensions rather than forcing every engine into PostgreSQL's feature set.
 

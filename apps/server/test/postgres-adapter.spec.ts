@@ -52,6 +52,9 @@ function mockBrowseQueries(total = '1', rows: Record<string, string | null>[] = 
         referencedSchema: null, referencedTable: null, referencedFieldNames: [],
       }] };
     }
+    if (sql.includes('has_column_privilege')) {
+      return { rows: [{ name: 'id', canUpdate: true, canInsert: true, tableInsert: true, tableDelete: true }] };
+    }
     if (sql.startsWith('SELECT count(*)')) return { rows: [{ total }] };
     if (sql.startsWith('SELECT "id"::text')) return { rows };
     throw new Error(`Unexpected mock SQL: ${sql}`);

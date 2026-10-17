@@ -21,7 +21,7 @@ import {
   migrationPreviewRequestSchema,
   foreignKeyFieldChoicesRequestSchema,
   schemaFieldDraftRequestSchema,
-  postgresConnectRequestSchema,
+  databaseConnectRequestSchema,
   tableDataQueryRequestSchema,
   tableDataRowUpdateSchema,
   tableDataRowInsertSchema,
@@ -30,22 +30,16 @@ import {
   type ConnectResponse,
 } from '@querydock/contracts';
 import { ConnectionSessionsService } from './connection-sessions.service.js';
-import { MigrationPlanError, PostgresAdapter, PostgresConnectionError } from '../postgres/postgres.adapter.js';
-
-const postgresCapabilities = {
-  discoverResources: true,
-  inspectTables: true,
-  browseData: true,
-  mutateData: true,
-  editSchema: true,
-  executeSql: false,
-} as const;
+import { MigrationPlanError } from '../database/database-errors.js';
+import { PostgresAdapter, PostgresConnectionError } from '../postgres/postgres.adapter.js';
+import { SqlServerAdapter, SqlServerConnectionError } from '../sqlserver/sqlserver.adapter.js';
 
 @Controller('connections')
 export class ConnectionsController {
   constructor(
     private readonly sessions: ConnectionSessionsService,
     private readonly postgres: PostgresAdapter,
+    private readonly sqlserver: SqlServerAdapter,
   ) {}
 
   /** Validates settings, verifies database access, and creates a session-scoped connection. */
@@ -55,12 +49,14 @@ export class ConnectionsController {
     @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
   ): Promise<ConnectResponse> {
-    const parsed = postgresConnectRequestSchema.safeParse(body);
-    if (!parsed.success) throw new BadRequestException('Invalid PostgreSQL connection settings.');
+    const parsed = databaseConnectRequestSchema.safeParse(body);
+    if (!parsed.success) throw new BadRequestException('Invalid database connection settings.');
 
     let verified;
     try {
-      verified = await this.postgres.verifyConnection(parsed.data);
+      verified = parsed.data.adapter === 'postgresql'
+        ? await this.postgres.verifyConnection(parsed.data)
+        : await this.sqlserver.verifyConnection(parsed.data);
     } catch (error) {
       throw this.asSafeDatabaseException(error);
     }
@@ -73,8 +69,12 @@ export class ConnectionsController {
         username: parsed.data.username,
       },
       serverVersion: verified.serverVersion,
-      capabilities: postgresCapabilities,
-      schemaCapabilities: this.postgres.schemaCapabilities(),
+      capabilities: parsed.data.adapter === 'postgresql' ? {
+        discoverResources: true, inspectTables: true, browseData: true, mutateData: true, editSchema: true, executeSql: false,
+      } : {
+        discoverResources: true, inspectTables: true, browseData: true, mutateData: true, editSchema: false, executeSql: false,
+      },
+      schemaCapabilities: parsed.data.adapter === 'postgresql' ? this.postgres.schemaCapabilities() : this.sqlserver.schemaCapabilities(),
     });
   }
 
@@ -96,7 +96,9 @@ export class ConnectionsController {
   ) {
     const configuration = this.sessions.requireConnection(request, response, connectionId);
     try {
-      return await this.postgres.listResources(configuration);
+      return configuration.adapter === 'postgresql'
+        ? await this.postgres.listResources(configuration)
+        : await this.sqlserver.listResources(configuration);
     } catch (error) {
       throw this.asSafeDatabaseException(error);
     }
@@ -109,8 +111,10 @@ export class ConnectionsController {
     @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
   ) {
-    this.sessions.requireConnection(request, response, connectionId);
-    return this.postgres.editableFieldTypes();
+    const configuration = this.sessions.requireConnection(request, response, connectionId);
+    return configuration.adapter === 'postgresql'
+      ? this.postgres.editableFieldTypes()
+      : this.sqlserver.editableFieldTypes();
   }
 
   /** Inspects a visible table and maps absence or database failures to safe HTTP errors. */
@@ -128,7 +132,9 @@ export class ConnectionsController {
 
     const configuration = this.sessions.requireConnection(request, response, connectionId);
     try {
-      const snapshot = await this.postgres.inspectTable(configuration, schema, table);
+      const snapshot = configuration.adapter === 'postgresql'
+        ? await this.postgres.inspectTable(configuration, schema, table)
+        : await this.sqlserver.inspectTable(configuration, schema, table);
       if (!snapshot) throw new NotFoundException('The requested table was not found or is not visible to this user.');
       return snapshot;
     } catch (error) {
@@ -153,7 +159,9 @@ export class ConnectionsController {
     if (!parsed.success) throw new BadRequestException('Invalid table data query. Choose a page size up to 100 rows and valid filters.');
     const configuration = this.sessions.requireConnection(request, response, connectionId);
     try {
-      return await this.postgres.queryTableData(configuration, schema, table, parsed.data);
+      return configuration.adapter === 'postgresql'
+        ? await this.postgres.queryTableData(configuration, schema, table, parsed.data)
+        : await this.sqlserver.queryTableData(configuration, schema, table, parsed.data);
     } catch (error) {
       if (error instanceof MigrationPlanError) throw this.asMigrationException(error);
       throw this.asSafeDatabaseException(error);
@@ -175,7 +183,8 @@ export class ConnectionsController {
     if (!parsed.success) throw new BadRequestException('Invalid table row update. Refresh the row and submit a completed row edit.');
     const configuration = this.sessions.requireConnection(request, response, connectionId);
     try {
-      await this.postgres.updateTableDataRow(configuration, schema, table, parsed.data);
+      if (configuration.adapter === 'postgresql') await this.postgres.updateTableDataRow(configuration, schema, table, parsed.data);
+      else await this.sqlserver.updateTableDataRow(configuration, schema, table, parsed.data);
     } catch (error) {
       if (error instanceof MigrationPlanError) throw this.asMigrationException(error);
       throw this.asSafeDatabaseException(error);
@@ -197,7 +206,8 @@ export class ConnectionsController {
     if (!parsed.success) throw new BadRequestException('Invalid table row delete. Refresh the row and submit its current primary key and version.');
     const configuration = this.sessions.requireConnection(request, response, connectionId);
     try {
-      await this.postgres.deleteTableDataRow(configuration, schema, table, parsed.data);
+      if (configuration.adapter === 'postgresql') await this.postgres.deleteTableDataRow(configuration, schema, table, parsed.data);
+      else await this.sqlserver.deleteTableDataRow(configuration, schema, table, parsed.data);
     } catch (error) {
       if (error instanceof MigrationPlanError) throw this.asMigrationException(error);
       throw this.asSafeDatabaseException(error);
@@ -220,7 +230,9 @@ export class ConnectionsController {
     if (!parsed.success) throw new BadRequestException('Invalid data Runbook preview. Refresh the table and submit valid row operations.');
     const configuration = this.sessions.requireConnection(request, response, connectionId);
     try {
-      return await this.postgres.previewDataRunbook(configuration, schema, table, parsed.data.operations);
+      return configuration.adapter === 'postgresql'
+        ? await this.postgres.previewDataRunbook(configuration, schema, table, parsed.data.operations)
+        : await this.sqlserver.previewDataRunbook(configuration, schema, table, parsed.data.operations);
     } catch (error) {
       if (error instanceof MigrationPlanError) throw this.asMigrationException(error);
       throw this.asSafeDatabaseException(error);
@@ -242,7 +254,8 @@ export class ConnectionsController {
     if (!parsed.success) throw new BadRequestException('Invalid new table row. Enter valid values and submit the completed row.');
     const configuration = this.sessions.requireConnection(request, response, connectionId);
     try {
-      await this.postgres.insertTableDataRow(configuration, schema, table, parsed.data);
+      if (configuration.adapter === 'postgresql') await this.postgres.insertTableDataRow(configuration, schema, table, parsed.data);
+      else await this.sqlserver.insertTableDataRow(configuration, schema, table, parsed.data);
     } catch (error) {
       if (error instanceof MigrationPlanError) throw this.asMigrationException(error);
       throw this.asSafeDatabaseException(error);
@@ -264,10 +277,11 @@ export class ConnectionsController {
     const parsed = foreignKeyFieldChoicesRequestSchema.safeParse(body);
     if (!parsed.success) throw new BadRequestException('Choose one or more local fields for the foreign key.');
     const configuration = this.sessions.requireConnection(request, response, connectionId);
+    if (configuration.adapter !== 'postgresql') {
+      throw new BadRequestException('SQL Server schema and relationship editing is not enabled yet.');
+    }
     try {
-      return await this.postgres.foreignKeyFieldChoices(
-        configuration, schema, table, targetSchema, targetTable, parsed.data.localFieldNames,
-      );
+      return await this.postgres.foreignKeyFieldChoices(configuration, schema, table, targetSchema, targetTable, parsed.data.localFieldNames);
     } catch (error) {
       if (error instanceof MigrationPlanError) throw this.asMigrationException(error);
       throw this.asSafeDatabaseException(error);
@@ -287,7 +301,9 @@ export class ConnectionsController {
     if (!parsed.success) throw new BadRequestException('Invalid schema migration preview request.');
     const configuration = this.sessions.requireConnection(request, response, connectionId);
     try {
-      return await this.postgres.previewMigration(configuration, parsed.data);
+      return configuration.adapter === 'postgresql'
+        ? await this.postgres.previewMigration(configuration, parsed.data)
+        : await this.sqlserver.previewMigration(configuration, parsed.data);
     } catch (error) {
       throw this.asMigrationException(error);
     }
@@ -305,6 +321,7 @@ export class ConnectionsController {
     const parsed = schemaFieldDraftRequestSchema.safeParse(body);
     if (!parsed.success) throw new BadRequestException('Invalid schema field draft request.');
     const configuration = this.sessions.requireConnection(request, response, connectionId);
+    if (configuration.adapter !== 'postgresql') throw new BadRequestException('SQL Server schema editing is not enabled yet.');
     try {
       return await this.postgres.previewSchemaFieldDraft(configuration, parsed.data);
     } catch (error) {
@@ -325,7 +342,9 @@ export class ConnectionsController {
     if (!parsed.success) throw new BadRequestException('Invalid schema migration apply request.');
     const configuration = this.sessions.requireConnection(request, response, connectionId);
     try {
-      return await this.postgres.applyMigration(configuration, parsed.data);
+      return configuration.adapter === 'postgresql'
+        ? await this.postgres.applyMigration(configuration, parsed.data)
+        : await this.sqlserver.applyMigration(configuration, parsed.data);
     } catch (error) {
       throw this.asMigrationException(error);
     }
@@ -344,9 +363,9 @@ export class ConnectionsController {
 
   /** Converts driver failures to a generic message, exposing only adapter-approved text. */
   private asSafeDatabaseException(error: unknown): BadGatewayException {
-    const message = error instanceof PostgresConnectionError
+    const message = error instanceof PostgresConnectionError || error instanceof SqlServerConnectionError
       ? error.safeMessage
-      : 'The PostgreSQL request failed. Check the connection and database permissions.';
+      : 'The database request failed. Check the connection and database permissions.';
     return new BadGatewayException(message);
   }
 
