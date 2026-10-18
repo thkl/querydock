@@ -26,15 +26,34 @@ export const sqlServerConnectRequestSchema = z.object({
 });
 
 export type SqlServerConnectRequest = z.infer<typeof sqlServerConnectRequestSchema>;
+export const mysqlConnectRequestSchema = z.object({
+  adapter: z.literal('mysql'),
+  host: z.string().trim().min(1).max(255),
+  port: z.number().int().min(1).max(65535),
+  database: z.string().trim().min(1).max(64),
+  username: z.string().trim().min(1).max(128),
+  password: z.string().max(1024),
+  ssl: z.boolean().default(false),
+});
+export type MysqlConnectRequest = z.infer<typeof mysqlConnectRequestSchema>;
+export const supportedDatabaseAdapterSchema = z.object({
+  adapter: z.enum(['postgresql', 'sqlserver', 'mysql']),
+  label: z.string(),
+  defaultPort: z.number().int().min(1).max(65535),
+  transportOptions: z.enum(['postgresSsl', 'sqlServerTls', 'mysqlTls']),
+});
+export type SupportedDatabaseAdapter = z.infer<typeof supportedDatabaseAdapterSchema>;
 export const databaseConnectRequestSchema = z.discriminatedUnion('adapter', [
   postgresConnectRequestSchema,
   sqlServerConnectRequestSchema,
+  mysqlConnectRequestSchema,
 ]);
 export type DatabaseConnectRequest = z.infer<typeof databaseConnectRequestSchema>;
 
 export const connectionTargetSchema = z.discriminatedUnion('adapter', [
   postgresConnectRequestSchema.pick({ adapter: true, host: true, port: true, database: true, username: true }),
   sqlServerConnectRequestSchema.pick({ adapter: true, host: true, port: true, database: true, username: true }),
+  mysqlConnectRequestSchema.pick({ adapter: true, host: true, port: true, database: true, username: true }),
 ]);
 
 export type ConnectionTarget = z.infer<typeof connectionTargetSchema>;
@@ -69,7 +88,7 @@ export const effectivePrivilegeSchema = z.object({
 });
 
 export const databasePermissionReportSchema = z.object({
-  adapter: z.enum(['postgresql', 'sqlserver']),
+  adapter: z.enum(['postgresql', 'sqlserver', 'mysql']),
   database: z.string(),
   currentUser: z.string(),
   serverUser: z.string().nullable(),

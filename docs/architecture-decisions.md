@@ -23,7 +23,7 @@ Users change their development database and export a migration file. Their appli
 - Backend: NestJS and TypeScript.
 - Shared contracts: Zod schemas for requests, responses, descriptors, and runtime validation.
 - SQL editor: CodeMirror 6 for query tabs and runbook SQL previews, styled to match the workbench. Start with SQL highlighting and editing shortcuts; schema-aware autocomplete can follow.
-- Database access: native database drivers inside adapters, using `pg` for PostgreSQL and `mssql` (Tedious) for Microsoft SQL Server. Do not use an ORM for database access or schema management. Adapters directly control introspection, parameterized data queries, transactions, and migration SQL.
+- Database access: native database drivers inside adapters, using `pg` for PostgreSQL, `mssql` (Tedious) for Microsoft SQL Server, and `mysql2` for MySQL. Do not use an ORM for database access or schema management. Adapters directly control introspection, parameterized data queries, transactions, and migration SQL.
 - Repository: pnpm workspaces monorepo. Start without Nx; reconsider it if repository growth warrants additional task/dependency tooling.
 - Layout: `apps/web` for Angular, `apps/server` for NestJS, and `packages/contracts` for shared Zod schemas and types.
 - Dependency policy: minimize additional dependencies to reduce ongoing update and maintenance work. Add a library only when its benefit justifies its maintenance cost; prefer platform/framework APIs for small, bounded needs. This does not require rebuilding complex components already selected, such as the SQL editor.
@@ -56,6 +56,8 @@ Adapters own:
 - SQL query execution and transactional runbook application.
 
 The SQL Server adapter supports connection, resource discovery, schema inspection, bounded data browsing, and guarded row insert/update/delete operations, including data Runbook preview and Apply. Its initial schema migration scope supports permission-gated foreign-key addition/removal and dependency-aware table drops in atomic cross-table batches. Field editing, table rename, and table creation remain unavailable. Snapshots advertise these narrower capabilities separately from `canAlter`; the connection advertises schema workflow support through `editSchema` while individual actions stay adapter- and permission-gated.
+
+The initial MySQL adapter supports connection verification, table/view discovery, schema inspection, and bounded read-only data browsing. Data writes, schema changes, and SQL execution remain unavailable; the adapter advertises those limits through connection and snapshot capabilities. The connection form loads supported engine names and default ports from the server.
 
 Keep capabilities, type/editor descriptors, and current resource metadata distinct. Fetch capabilities per connection because engine version, extensions, and permissions affect behavior. Preserve engine-specific information through extensions rather than forcing every engine into PostgreSQL's feature set.
 

@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, ElementRef, inject, signal, viewChild } from '@angular/core';
+import { ChangeDetectionStrategy, Component, ElementRef, effect, inject, signal, viewChild } from '@angular/core';
 import type { DatabaseConnectRequest } from '@querydock/contracts';
 import { ConnectionApiService } from './connection-api.service';
 import { ConnectionVaultService, type SavedConnectionProfile } from './connection-vault.service';
@@ -17,7 +17,7 @@ export class ConnectionDialogComponent {
   readonly saveToVault = signal(false);
   readonly vaultMessage = signal<string | null>(null);
   readonly pendingVaultSave = signal<{ configuration: DatabaseConnectRequest; name: string } | null>(null);
-  readonly selectedAdapter = signal<'postgresql' | 'sqlserver'>('postgresql');
+  readonly selectedAdapter = signal<'postgresql' | 'sqlserver' | 'mysql'>('postgresql');
   readonly resetVaultArmed = signal(false);
   readonly forgettingProfileId = signal<string | null>(null);
   readonly editingProfileId = signal<string | null>(null);
@@ -27,6 +27,15 @@ export class ConnectionDialogComponent {
   readonly pendingBackupFile = signal<File | null>(null);
   readonly backupFileInput = viewChild<ElementRef<HTMLInputElement>>('backupFileInput');
   readonly connectionForm = viewChild<ElementRef<HTMLFormElement>>('connectionForm');
+
+  constructor() {
+    effect(() => {
+      const supported = this.state.supportedAdapters();
+      if (supported.length && !supported.some(({ adapter }) => adapter === this.selectedAdapter())) {
+        this.selectedAdapter.set(supported[0]!.adapter);
+      }
+    });
+  }
 
   /** Closes the dialog through the connection service unless a request is active. */
   closeDialog(): void {
@@ -101,7 +110,11 @@ export class ConnectionDialogComponent {
         encrypt: values.get('encrypt') === 'on',
         trustServerCertificate: values.get('trustServerCertificate') === 'on',
       }
-      : {
+      : this.selectedAdapter() === 'mysql' ? {
+        adapter: 'mysql',
+        ...common,
+        ssl: values.get('mysqlSsl') === 'on',
+      } : {
         adapter: 'postgresql',
         ...common,
         sslMode: String(values.get('sslMode') ?? 'require') as 'disable' | 'require' | 'verify-full',
@@ -143,7 +156,7 @@ export class ConnectionDialogComponent {
 
   /** Selects a database engine for the connection form. */
   updateAdapter(event: Event): void {
-    this.selectedAdapter.set((event.currentTarget as HTMLSelectElement).value as 'postgresql' | 'sqlserver');
+    this.selectedAdapter.set((event.currentTarget as HTMLSelectElement).value as 'postgresql' | 'sqlserver' | 'mysql');
   }
 
   /** Retries saving credentials after a successful connection but failed vault write. */
@@ -299,14 +312,15 @@ export class ConnectionDialogComponent {
     const { configuration } = profile;
     const transport = configuration.adapter === 'postgresql'
       ? configuration.sslMode
-      : configuration.encrypt ? 'TLS encrypted' : 'TLS disabled';
+      : configuration.adapter === 'sqlserver' ? configuration.encrypt ? 'TLS encrypted' : 'TLS disabled'
+        : configuration.ssl ? 'TLS encrypted' : 'TLS disabled';
     return `${configuration.database} · ${configuration.host}:${configuration.port} · ${configuration.username} · ${transport}`;
   }
 
   /** Returns the port displayed for a saved profile or the selected engine's usual default. */
   connectionPort(): number {
     const configuration = this.editingConnectionProfile()?.configuration;
-    return configuration?.port ?? (this.selectedAdapter() === 'postgresql' ? 5432 : 1433);
+    return configuration?.port ?? this.state.supportedAdapters().find(({ adapter }) => adapter === this.selectedAdapter())?.defaultPort ?? 1;
   }
 
   /** Provides the saved password only while that profile is explicitly being edited. */
@@ -324,5 +338,11 @@ export class ConnectionDialogComponent {
   connectionTrustServerCertificate(): boolean {
     const configuration = this.editingConnectionProfile()?.configuration;
     return configuration?.adapter === 'sqlserver' && configuration.trustServerCertificate;
+  }
+
+  /** Returns the MySQL TLS setting displayed for a saved profile being edited. */
+  connectionMysqlSsl(): boolean {
+    const configuration = this.editingConnectionProfile()?.configuration;
+    return configuration?.adapter === 'mysql' && configuration.ssl;
   }
 }

@@ -53,7 +53,7 @@
       </div>
       }
       <p class="page-description">Current metadata from {{ connections.activeConnection()?.target.database }} ·
-        {{ connections.activeConnection()?.target?.adapter === 'sqlserver' ? 'Microsoft SQL Server' : 'PostgreSQL' }}</p>
+        {{ connections.activeConnection()?.target?.adapter === 'sqlserver' ? 'Microsoft SQL Server' : connections.activeConnection()?.target?.adapter === 'mysql' ? 'MySQL' : 'PostgreSQL' }}</p>
     </div>
     <div class="schema-heading-actions">
       @if (table.canBrowseData ?? connections.activeConnection()?.capabilities?.browseData) {

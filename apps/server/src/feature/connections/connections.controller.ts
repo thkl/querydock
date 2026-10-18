@@ -33,6 +33,7 @@ import { ConnectionSessionsService } from './connection-sessions.service.js';
 import { MigrationPlanError } from '../database/database-errors.js';
 import { PostgresAdapter, PostgresConnectionError } from '../postgres/postgres.adapter.js';
 import { SqlServerAdapter, SqlServerConnectionError } from '../sqlserver/sqlserver.adapter.js';
+import { MysqlAdapter, MysqlConnectionError } from '../mysql/mysql.adapter.js';
 
 @Controller('connections')
 export class ConnectionsController {
@@ -40,7 +41,18 @@ export class ConnectionsController {
     private readonly sessions: ConnectionSessionsService,
     private readonly postgres: PostgresAdapter,
     private readonly sqlserver: SqlServerAdapter,
+    private readonly mysql: MysqlAdapter,
   ) {}
+
+  /** Lists database adapters available in this server build for the connection form. */
+  @Get('adapters')
+  supportedAdapters() {
+    return [
+      { adapter: 'postgresql', label: 'PostgreSQL', defaultPort: 5432, transportOptions: 'postgresSsl' },
+      { adapter: 'sqlserver', label: 'Microsoft SQL Server', defaultPort: 1433, transportOptions: 'sqlServerTls' },
+      { adapter: 'mysql', label: 'MySQL', defaultPort: 3306, transportOptions: 'mysqlTls' },
+    ] as const;
+  }
 
   /** Validates settings, verifies database access, and creates a session-scoped connection. */
   @Post()
@@ -56,7 +68,9 @@ export class ConnectionsController {
     try {
       verified = parsed.data.adapter === 'postgresql'
         ? await this.postgres.verifyConnection(parsed.data)
-        : await this.sqlserver.verifyConnection(parsed.data);
+        : parsed.data.adapter === 'sqlserver'
+          ? await this.sqlserver.verifyConnection(parsed.data)
+          : await this.mysql.verifyConnection(parsed.data);
     } catch (error) {
       throw this.asSafeDatabaseException(error);
     }
@@ -71,10 +85,12 @@ export class ConnectionsController {
       serverVersion: verified.serverVersion,
       capabilities: parsed.data.adapter === 'postgresql' ? {
         discoverResources: true, inspectTables: true, browseData: true, mutateData: true, editSchema: true, executeSql: false,
-      } : {
+      } : parsed.data.adapter === 'sqlserver' ? {
         discoverResources: true, inspectTables: true, browseData: true, mutateData: true, editSchema: true, executeSql: false,
+      } : {
+        discoverResources: true, inspectTables: true, browseData: true, mutateData: false, editSchema: false, executeSql: false,
       },
-      schemaCapabilities: parsed.data.adapter === 'postgresql' ? this.postgres.schemaCapabilities() : this.sqlserver.schemaCapabilities(),
+      schemaCapabilities: parsed.data.adapter === 'postgresql' ? this.postgres.schemaCapabilities() : parsed.data.adapter === 'sqlserver' ? this.sqlserver.schemaCapabilities() : this.mysql.schemaCapabilities(),
     });
   }
 
@@ -98,7 +114,9 @@ export class ConnectionsController {
     try {
       return configuration.adapter === 'postgresql'
         ? await this.postgres.inspectPermissions(configuration)
-        : await this.sqlserver.inspectPermissions(configuration);
+        : configuration.adapter === 'sqlserver'
+          ? await this.sqlserver.inspectPermissions(configuration)
+          : await this.mysql.inspectPermissions(configuration);
     } catch (error) {
       throw this.asSafeDatabaseException(error);
     }
@@ -115,7 +133,9 @@ export class ConnectionsController {
     try {
       return configuration.adapter === 'postgresql'
         ? await this.postgres.listResources(configuration)
-        : await this.sqlserver.listResources(configuration);
+        : configuration.adapter === 'sqlserver'
+          ? await this.sqlserver.listResources(configuration)
+          : await this.mysql.listResources(configuration);
     } catch (error) {
       throw this.asSafeDatabaseException(error);
     }
@@ -131,7 +151,7 @@ export class ConnectionsController {
     const configuration = this.sessions.requireConnection(request, response, connectionId);
     return configuration.adapter === 'postgresql'
       ? this.postgres.editableFieldTypes()
-      : this.sqlserver.editableFieldTypes();
+      : configuration.adapter === 'sqlserver' ? this.sqlserver.editableFieldTypes() : this.mysql.editableFieldTypes();
   }
 
   /** Inspects a visible table and maps absence or database failures to safe HTTP errors. */
@@ -151,7 +171,9 @@ export class ConnectionsController {
     try {
       const snapshot = configuration.adapter === 'postgresql'
         ? await this.postgres.inspectTable(configuration, schema, table)
-        : await this.sqlserver.inspectTable(configuration, schema, table);
+        : configuration.adapter === 'sqlserver'
+          ? await this.sqlserver.inspectTable(configuration, schema, table)
+          : await this.mysql.inspectTable(configuration, schema, table);
       if (!snapshot) throw new NotFoundException('The requested table was not found or is not visible to this user.');
       return snapshot;
     } catch (error) {
@@ -178,7 +200,9 @@ export class ConnectionsController {
     try {
       return configuration.adapter === 'postgresql'
         ? await this.postgres.queryTableData(configuration, schema, table, parsed.data)
-        : await this.sqlserver.queryTableData(configuration, schema, table, parsed.data);
+        : configuration.adapter === 'sqlserver'
+          ? await this.sqlserver.queryTableData(configuration, schema, table, parsed.data)
+          : await this.mysql.queryTableData(configuration, schema, table, parsed.data);
     } catch (error) {
       if (error instanceof MigrationPlanError) throw this.asMigrationException(error);
       throw this.asSafeDatabaseException(error);
@@ -201,7 +225,8 @@ export class ConnectionsController {
     const configuration = this.sessions.requireConnection(request, response, connectionId);
     try {
       if (configuration.adapter === 'postgresql') await this.postgres.updateTableDataRow(configuration, schema, table, parsed.data);
-      else await this.sqlserver.updateTableDataRow(configuration, schema, table, parsed.data);
+      else if (configuration.adapter === 'sqlserver') await this.sqlserver.updateTableDataRow(configuration, schema, table, parsed.data);
+      else await this.mysql.updateTableDataRow(configuration, schema, table, parsed.data);
     } catch (error) {
       if (error instanceof MigrationPlanError) throw this.asMigrationException(error);
       throw this.asSafeDatabaseException(error);
@@ -224,7 +249,8 @@ export class ConnectionsController {
     const configuration = this.sessions.requireConnection(request, response, connectionId);
     try {
       if (configuration.adapter === 'postgresql') await this.postgres.deleteTableDataRow(configuration, schema, table, parsed.data);
-      else await this.sqlserver.deleteTableDataRow(configuration, schema, table, parsed.data);
+      else if (configuration.adapter === 'sqlserver') await this.sqlserver.deleteTableDataRow(configuration, schema, table, parsed.data);
+      else await this.mysql.deleteTableDataRow(configuration, schema, table, parsed.data);
     } catch (error) {
       if (error instanceof MigrationPlanError) throw this.asMigrationException(error);
       throw this.asSafeDatabaseException(error);
@@ -249,7 +275,9 @@ export class ConnectionsController {
     try {
       return configuration.adapter === 'postgresql'
         ? await this.postgres.previewDataRunbook(configuration, schema, table, parsed.data.operations)
-        : await this.sqlserver.previewDataRunbook(configuration, schema, table, parsed.data.operations);
+        : configuration.adapter === 'sqlserver'
+          ? await this.sqlserver.previewDataRunbook(configuration, schema, table, parsed.data.operations)
+          : await this.mysql.previewDataRunbook(configuration, schema, table, parsed.data.operations);
     } catch (error) {
       if (error instanceof MigrationPlanError) throw this.asMigrationException(error);
       throw this.asSafeDatabaseException(error);
@@ -272,7 +300,8 @@ export class ConnectionsController {
     const configuration = this.sessions.requireConnection(request, response, connectionId);
     try {
       if (configuration.adapter === 'postgresql') await this.postgres.insertTableDataRow(configuration, schema, table, parsed.data);
-      else await this.sqlserver.insertTableDataRow(configuration, schema, table, parsed.data);
+      else if (configuration.adapter === 'sqlserver') await this.sqlserver.insertTableDataRow(configuration, schema, table, parsed.data);
+      else await this.mysql.insertTableDataRow(configuration, schema, table, parsed.data);
     } catch (error) {
       if (error instanceof MigrationPlanError) throw this.asMigrationException(error);
       throw this.asSafeDatabaseException(error);
@@ -297,7 +326,9 @@ export class ConnectionsController {
     try {
       return configuration.adapter === 'postgresql'
         ? await this.postgres.foreignKeyFieldChoices(configuration, schema, table, targetSchema, targetTable, parsed.data.localFieldNames)
-        : await this.sqlserver.foreignKeyFieldChoices(configuration, schema, table, targetSchema, targetTable, parsed.data.localFieldNames);
+        : configuration.adapter === 'sqlserver'
+          ? await this.sqlserver.foreignKeyFieldChoices(configuration, schema, table, targetSchema, targetTable, parsed.data.localFieldNames)
+          : await this.mysql.foreignKeyFieldChoices();
     } catch (error) {
       if (error instanceof MigrationPlanError) throw this.asMigrationException(error);
       throw this.asSafeDatabaseException(error);
@@ -319,7 +350,7 @@ export class ConnectionsController {
     try {
       return configuration.adapter === 'postgresql'
         ? await this.postgres.previewMigration(configuration, parsed.data)
-        : await this.sqlserver.previewMigration(configuration, parsed.data);
+        : configuration.adapter === 'sqlserver' ? await this.sqlserver.previewMigration(configuration, parsed.data) : await this.mysql.previewMigration();
     } catch (error) {
       throw this.asMigrationException(error);
     }
@@ -340,7 +371,7 @@ export class ConnectionsController {
     try {
       return configuration.adapter === 'postgresql'
         ? await this.postgres.previewSchemaFieldDraft(configuration, parsed.data)
-        : await this.sqlserver.previewSchemaFieldDraft(configuration, parsed.data);
+        : configuration.adapter === 'sqlserver' ? await this.sqlserver.previewSchemaFieldDraft(configuration, parsed.data) : await this.mysql.previewSchemaFieldDraft();
     } catch (error) {
       throw this.asMigrationException(error);
     }
@@ -361,7 +392,7 @@ export class ConnectionsController {
     try {
       return configuration.adapter === 'postgresql'
         ? await this.postgres.applyMigration(configuration, parsed.data)
-        : await this.sqlserver.applyMigration(configuration, parsed.data);
+        : configuration.adapter === 'sqlserver' ? await this.sqlserver.applyMigration(configuration, parsed.data) : await this.mysql.applyMigration();
     } catch (error) {
       throw this.asMigrationException(error);
     }
@@ -380,7 +411,7 @@ export class ConnectionsController {
 
   /** Converts driver failures to a generic message, exposing only adapter-approved text. */
   private asSafeDatabaseException(error: unknown): BadGatewayException {
-    const message = error instanceof PostgresConnectionError || error instanceof SqlServerConnectionError
+    const message = error instanceof PostgresConnectionError || error instanceof SqlServerConnectionError || error instanceof MysqlConnectionError
       ? error.safeMessage
       : 'The database request failed. Check the connection and database permissions.';
     return new BadGatewayException(message);

@@ -20,6 +20,7 @@ import type {
   DataRunbookPreviewRequest,
   DataRunbookPreviewResponse,
   DatabasePermissionReport,
+  SupportedDatabaseAdapter,
 } from '@querydock/contracts';
 import { dataRunbookPreviewResponseSchema, databasePermissionReportSchema, tableDataQueryResponseSchema } from '@querydock/contracts';
 
@@ -35,6 +36,7 @@ export class ApiRequestError extends Error {
 export class ConnectionApiService {
   readonly connectionNamesById = signal<ReadonlyMap<string, string>>(new Map());
   readonly connections = signal<ConnectResponse[]>([]);
+  readonly supportedAdapters = signal<SupportedDatabaseAdapter[]>([]);
   readonly sessionRestoreComplete = signal(false);
   readonly activeConnectionId = signal<string | null>(null);
   readonly resourcesByConnection = signal<ReadonlyMap<string, ResourceDescriptor[]>>(new Map());
@@ -77,7 +79,18 @@ export class ConnectionApiService {
   readonly connectDialogOpen = signal(false);
 
   constructor() {
+    void this.loadSupportedAdapters();
     void this.restoreSessionConnections();
+  }
+
+  /** Loads the adapter choices and defaults exposed by this QueryDock server build. */
+  private async loadSupportedAdapters(): Promise<void> {
+    try {
+      const adapters = await request<SupportedDatabaseAdapter[]>('/api/connections/adapters');
+      this.supportedAdapters.set(adapters);
+    } catch {
+      this.supportedAdapters.set([]);
+    }
   }
 
   /** Opens the connection dialog and clears its previous request error. */

@@ -471,7 +471,8 @@ function sameTarget(left: DatabaseConnectRequest, right: DatabaseConnectRequest)
   return left.adapter === 'postgresql' && right.adapter === 'postgresql'
     ? left.sslMode === right.sslMode
     : left.adapter === 'sqlserver' && right.adapter === 'sqlserver'
-      && left.encrypt === right.encrypt && left.trustServerCertificate === right.trustServerCertificate;
+      ? left.encrypt === right.encrypt && left.trustServerCertificate === right.trustServerCertificate
+      : left.adapter === 'mysql' && right.adapter === 'mysql' && left.ssl === right.ssl;
 }
 
 /** Validates vault metadata shape and encoded cryptographic value lengths. */

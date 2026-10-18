@@ -146,8 +146,9 @@
           <label class="field">
             <span>Database engine</span>
             <select name="adapter" [value]="selectedAdapter()" (change)="updateAdapter($event)">
-              <option value="postgresql">PostgreSQL</option>
-              <option value="sqlserver">Microsoft SQL Server</option>
+              @for (adapter of state.supportedAdapters(); track adapter.adapter) {
+                <option [value]="adapter.adapter">{{ adapter.label }}</option>
+              }
             </select>
           </label>
           <label class="field field-host">
@@ -176,7 +177,7 @@
             <span>Password</span>
             <input name="password" type="password" autocomplete="current-password" [value]="connectionPassword()" />
           </label>
-          @if (selectedAdapter() === 'postgresql') {
+        @if (selectedAdapter() === 'postgresql') {
             <label class="field field-ssl">
               <span>SSL mode</span>
               <select name="sslMode">
@@ -185,7 +186,7 @@
                 <option value="disable">Disable</option>
               </select>
             </label>
-          } @else {
+          } @else if (selectedAdapter() === 'sqlserver') {
             <label class="save-profile-option">
               <input name="encrypt" type="checkbox" [checked]="connectionEncrypt()" />
               <span>Encrypt connection</span>
@@ -193,6 +194,11 @@
             <label class="save-profile-option">
               <input name="trustServerCertificate" type="checkbox" [checked]="connectionTrustServerCertificate()" />
               <span>Trust server certificate (for local development only)</span>
+            </label>
+          } @else {
+            <label class="save-profile-option">
+              <input name="mysqlSsl" type="checkbox" [checked]="connectionMysqlSsl()" />
+              <span>Use TLS encryption</span>
             </label>
           }
         </div>

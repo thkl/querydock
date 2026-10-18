@@ -28,7 +28,7 @@
       <span class="connection-dot" aria-hidden="true"></span>
       <span class="connection-name">{{ connectionName() }}</span>
       <span class="connection-divider" aria-hidden="true">/</span>
-      <span class="connection-adapter">{{ activeConnection.target.adapter === 'postgresql' ? 'PostgreSQL' : 'SQL Server' }}</span>
+      <span class="connection-adapter">{{ activeConnection.target.adapter === 'postgresql' ? 'PostgreSQL' : activeConnection.target.adapter === 'sqlserver' ? 'SQL Server' : 'MySQL' }}</span>
       @if (activeConnection.serverVersion) {
         <span class="connection-divider connection-version-divider" aria-hidden="true">/</span>
         <span class="connection-version" [attr.title]="'Server version ' + activeConnection.serverVersion">

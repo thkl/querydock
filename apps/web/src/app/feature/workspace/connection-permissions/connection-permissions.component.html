@@ -22,7 +22,7 @@
       <div><span>Database</span><strong>{{ currentReport.database }}</strong></div>
       <div><span>Database user</span><strong>{{ currentReport.currentUser }}</strong></div>
       <div><span>Server login</span><strong>{{ currentReport.serverUser ?? 'Not reported' }}</strong></div>
-      <div><span>Adapter</span><strong>{{ currentReport.adapter === 'sqlserver' ? 'Microsoft SQL Server' : 'PostgreSQL' }}</strong></div>
+      <div><span>Adapter</span><strong>{{ currentReport.adapter === 'sqlserver' ? 'Microsoft SQL Server' : currentReport.adapter === 'mysql' ? 'MySQL' : 'PostgreSQL' }}</strong></div>
     </section>
 
     <section class="database-privileges" aria-labelledby="database-privileges-title">
